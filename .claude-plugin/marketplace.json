@@ -1,0 +1,16 @@
+{
+  "name": "tierflow-local",
+  "owner": {
+    "name": "Ganesh V"
+  },
+  "plugins": [
+    {
+      "name": "tierflow",
+      "source": "./",
+      "description": "Token-efficient model routing for Claude Code"
+    }
+  ],
+  "metadata": {
+    "description": "Local marketplace for the tierflow model-routing plugin"
+  }
+}

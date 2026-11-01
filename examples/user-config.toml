@@ -1,0 +1,24 @@
+# Copy to ~/.claude/tierflow/config.toml and keep only what you change.
+# This file is user policy: it can change anything in config/default.toml.
+
+[orchestrator]
+mode = "balanced"                 # economy | balanced | quality
+
+[budgets]
+max_cost_per_task_usd = 2.00
+max_cost_per_session_usd = 25.00
+enforcement = "ask"               # ask | deny | warn | off
+
+[routing]
+opus_gate = "auto"                # auto | allow | warn | ask | deny
+
+# Pin model versions per tier if you don't want the moving aliases:
+# [models]
+# light = "claude-haiku-5-5"
+# standard = "claude-sonnet-5-5"
+# reasoning = "claude-opus-5-5"
+
+# Contracted rates? Override the price table (USD per million tokens):
+# [pricing."claude-sonnet-5-5"]
+# input = 1.6
+# output = 8.0

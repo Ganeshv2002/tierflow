@@ -1,0 +1,63 @@
+# tierflow benchmark suite over the bundled fixture (Python, stdlib only, so it runs anywhere).
+# Add your own suites (React/TS, ASP.NET/C#, SQL) in the same format: point `repo` at a snapshot
+# directory and give each task a deterministic `verify` command. See docs/BENCHMARKING.md.
+
+[suite]
+name = "inventory-fixture"
+repo = "fixtures/inventory"
+max_budget_usd = 1.50          # hard cap per run (claude -p --max-budget-usd)
+timeout = 1200
+
+[[task]]
+id = "search"
+category = "simple file search"
+prompt = "Which function returns the items that need reordering, and in which file is it defined? Reply with just the function name and the file path."
+answer_contains = ["low_stock_items", "stock.py"]
+max_budget_usd = 0.50
+
+[[task]]
+id = "rename"
+category = "mechanical edit"
+prompt = "Rename the function `calc_total` in inventory/pricing.py to `calculate_total`, and update every call site and test that uses it. Do not change behaviour."
+hidden = "hidden/rename"
+verify = ["{python}", "-m", "unittest", "-q", "tests.test_hidden_rename"]
+max_budget_usd = 0.75
+
+[[task]]
+id = "bugfix"
+category = "small bug fix"
+prompt = "tests/test_pricing.py::PricingTests::test_bulk_discount fails. Find and fix the bug in the application code (do not edit the test). Run the test suite with `python -m unittest discover -s tests`."
+verify = ["{python}", "-m", "unittest", "discover", "-s", "tests", "-q"]
+max_budget_usd = 1.00
+
+[[task]]
+id = "feature"
+category = "feature implementation"
+prompt = "Add a function `to_csv(warehouse) -> str` to inventory/reports.py. It returns CSV text with the header `sku,name,quantity,unit_price` followed by one row per item sorted by sku, with unit_price formatted to two decimals (e.g. `S1,Bolt,3,0.50`). Add a unit test for it."
+hidden = "hidden/feature"
+verify = ["{python}", "-m", "unittest", "-q", "tests.test_hidden_feature"]
+max_budget_usd = 1.00
+
+[[task]]
+id = "refactor"
+category = "multi-file refactor"
+prompt = "`fmt_money` is duplicated in inventory/stock.py and inventory/reports.py. Move it into a new module inventory/formatting.py and make both modules use that single definition. Behaviour must not change; keep the existing tests passing."
+hidden = "hidden/refactor"
+verify = ["{python}", "-m", "unittest", "-q", "tests.test_hidden_refactor", "tests.test_stock"]
+max_budget_usd = 1.00
+
+[[task]]
+id = "debug"
+category = "complex debugging"
+prompt = "Users report that inventory reports sometimes show the wrong quantity for an item when reports for two different warehouses are generated in the same process. Find the root cause and fix it without breaking cache invalidation after stock changes."
+hidden = "hidden/debug"
+verify = ["{python}", "-m", "unittest", "-q", "tests.test_hidden_debug", "tests.test_stock"]
+max_budget_usd = 1.50
+
+[[task]]
+id = "architecture"
+category = "architectural change"
+prompt = "Pricing rules are hard-coded inside calc_total in inventory/pricing.py. Introduce a pluggable design: a `PricingEngine` class with `add_rule(rule)` and `total(item, qty, member=False) -> float`, where a rule is a callable `(item, qty, member, price) -> price` applied in registration order to the base price (unit_price * qty), and the result is rounded to 2 decimals. Add `default_engine()` returning an engine with the existing bulk and member rules, and make `calc_total` keep its signature and current results by delegating to the default engine. calc_total itself must no longer reference the discount constants."
+hidden = "hidden/architecture"
+verify = ["{python}", "-m", "unittest", "-q", "tests.test_hidden_architecture"]
+max_budget_usd = 1.50

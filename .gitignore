@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+bench/results/
+# runtime state written by tierflow itself (this folder is also its state home)
+sessions/
+metrics/
+cache/
+usage-cursors/
+active/
+errors.log
+payloads.jsonl
+config.toml
+
+# private: real-repo suite contains excerpts of a private codebase
+bench/suites/linkedin/

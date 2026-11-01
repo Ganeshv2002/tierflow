@@ -1,0 +1,23 @@
+# Optional: <repo>/.claude/tierflow.toml. Repository files are untrusted, so this file may only
+# tighten policy. Anything else is ignored and reported by `python orch.py config`.
+
+[context]
+extra_map_paths = ["docs/ai-context/CODEBASE_MAP.md", "codebase-map.json"]
+exclude_dirs = ["wwwroot/lib", "Migrations"]
+max_context_tokens = 4000          # can only go down
+
+[validation]
+run_lint = true
+# extra checks run when matching files change (argument lists, never a shell)
+[[validation.commands]]
+name = "sql lint"
+argv = ["sqlfluff", "lint", "--dialect", "tsql", "db/"]
+when = ["*.sql"]
+
+[[validation.commands]]
+name = "api contract tests"
+argv = ["dotnet", "test", "tests/Contracts.Tests/Contracts.Tests.csproj", "--nologo"]
+when = ["src/Api/*", "src/Shared/*"]
+
+[budgets]
+max_cost_per_task_usd = 1.00       # lower than the user's limit -> applies; higher -> ignored
