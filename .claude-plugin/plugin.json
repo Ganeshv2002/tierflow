@@ -1,6 +1,6 @@
 {
   "name": "tierflow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Token-efficient model routing for Claude Code: deterministic task classification, Haiku/Sonnet/Opus subagents, map-aware context retrieval, local validation, budgets and evidence-based escalation.",
   "author": { "name": "Ganesh V" },
   "license": "MIT",

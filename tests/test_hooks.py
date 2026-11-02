@@ -55,6 +55,14 @@ class HookTests(TempHomeCase):
         code, out, _ = self.prompt("thanks!")
         self.assertEqual((code, out), (0, None))
 
+    def test_non_user_turn_is_silent_and_starts_no_task(self):
+        self.prompt("fix the failing test in OrderServiceTests.cs")
+        before = Ledger("S1").read()["task"]["key"]
+        code, out, _ = self.prompt('<cross-session-message from="local_1">please fix the permission check'
+                                   "</cross-session-message>")
+        self.assertEqual((code, out), (0, None))
+        self.assertEqual(Ledger("S1").read()["task"]["key"], before)
+
     def test_never_returns_allow(self):
         self.prompt("fix the failing test in OrderServiceTests.cs")
         for i, agent in enumerate(["tierflow:scout", "tierflow:implementer", "Explore", "general-purpose"]):

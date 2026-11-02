@@ -29,7 +29,8 @@ DEFAULT_ALLOWED = ["Read", "Edit", "Write", "MultiEdit", "Grep", "Glob", "Agent"
                    "Bash(python:*)", "Bash(python3:*)", "Bash(pytest:*)", "Bash(git diff:*)", "Bash(git status:*)",
                    "Bash(git log:*)", "Bash(rg:*)", "Bash(grep:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(npx tsc:*)",
                    "Bash(dotnet build:*)", "Bash(dotnet test:*)", "Bash(npm test:*)", "Bash(npm run:*)",
-                   "Bash(npx vitest:*)", "Bash(npx --no-install:*)"]
+                   "Bash(npx vitest:*)", "Bash(npx --no-install:*)", "Bash(.venv/Scripts/python:*)",
+                   "Bash(./.venv/Scripts/python:*)", "Bash(.venv/bin/python:*)"]
 ARMS = ("baseline", "optimized")
 
 
@@ -115,11 +116,11 @@ def claude_argv(claude: str, task: dict, suite: dict, arm: str, args) -> list[st
     model = args.main_model or s.get("main_model")
     if model:
         argv += ["--model", model]
+    # An installed copy of tierflow is disabled in BOTH arms: the baseline must not get it, and the
+    # optimized arm must run exactly this source tree (not an older installed version, and not twice).
+    argv += ["--settings", json.dumps({"enabledPlugins": {"tierflow@tierflow-local": False}})]
     if arm == "optimized":
         argv += ["--plugin-dir", str(PACKAGE_ROOT)]
-    else:
-        # make sure an installed copy of tierflow cannot leak into the baseline
-        argv += ["--settings", json.dumps({"enabledPlugins": {"tierflow@tierflow-local": False}})]
     return argv
 
 
@@ -128,6 +129,50 @@ def find_transcript(session_id: str | None) -> Path | None:
         return None
     hits = list((Path.home() / ".claude" / "projects").glob(f"*/{session_id}.jsonl"))
     return hits[0] if hits else None
+
+
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def inside_claude_dir(path: Path) -> bool:
+    """Claude Code treats everything under a `.claude` folder as sensitive and blocks edits there, so a
+    workspace inside one turns every edit task into a silent failure."""
+    return any(part.lower() == ".claude" for part in Path(path).resolve().parts)
+
+
+def permission_denials(transcript: Path) -> dict:
+    """Count tool calls the CLI refused, in the main transcript and its subagents. Edit-tool denials are
+    harness faults (those tools are allowed); other denials (e.g. an unlisted shell command) are the model's
+    problem to route around, so they are only counted."""
+    from .usage import long_path, subagent_dir
+    files = [Path(transcript)]
+    sdir = long_path(subagent_dir(transcript))
+    if sdir.is_dir():
+        files += sorted(sdir.glob("*.jsonl"))
+    tools: dict[str, str] = {}
+    edit, other, example = 0, 0, ""
+    for f in files:
+        for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+            if '"tool_use"' not in line and '"tool_result"' not in line:
+                continue
+            try:
+                content = (json.loads(line).get("message") or {}).get("content")
+            except ValueError:
+                continue
+            for b in content if isinstance(content, list) else []:
+                if b.get("type") == "tool_use":
+                    tools[b.get("id", "")] = b.get("name", "")
+                elif b.get("type") == "tool_result" and b.get("is_error"):
+                    c = b.get("content")
+                    text = c if isinstance(c, str) else json.dumps(c)
+                    if "requested permissions" not in text and "sensitive file" not in text:
+                        continue
+                    if tools.get(b.get("tool_use_id", "")) in EDIT_TOOLS or "sensitive file" in text:
+                        edit += 1
+                        example = example or text[:200]
+                    else:
+                        other += 1
+    return {"edit": edit, "other": other, "example": example}
 
 
 def verify(task: dict, suite: dict, ws: Path, result_text: str) -> dict:
@@ -194,6 +239,10 @@ def run_one(claude: str, suite: dict, task: dict, arm: str, rep: int, run_dir: P
                              "cost_usd": u.cost_usd} for m, u in t.models.items()}
         rec["cost_usd_transcript"] = round(t.cost_usd, 6)
         rec["model_calls"] = t.requests
+        denied = permission_denials(tp)
+        rec["permission_denials"] = denied["edit"] + denied["other"]
+        if denied["edit"]:
+            rec["harness_error"] = f"edit blocked by the CLI {denied['edit']}x (run excluded): {denied['example']}"
     tf_metrics = list((rdir / "tierflow-home" / "metrics").glob("*.jsonl"))
     if tf_metrics:
         events = [json.loads(l) for f in tf_metrics for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
@@ -203,7 +252,8 @@ def run_one(claude: str, suite: dict, task: dict, arm: str, rep: int, run_dir: P
     rec.update(verify(task, suite, ws, out.get("result", "")))
     diff = proc.run(["git", "diff", "--shortstat", "HEAD"], cwd=ws, timeout=60)
     rec["diff"] = diff.stdout.strip()
-    rec["needs_human"] = bool(rec.get("is_error") or rec.get("timed_out") or rec.get("correct") is False)
+    rec["needs_human"] = bool(rec.get("is_error") or rec.get("timed_out") or rec.get("correct") is False
+                              or rec.get("harness_error"))
     if not args.keep_workspaces:
         remove_tree(ws, suite["suite"].get("link", []))
     return rec
@@ -243,10 +293,17 @@ def _stats(vals: list[float]) -> str:
 
 
 def summarize(records: list[dict]) -> str:
+    excluded = [r for r in records if r.get("harness_error")]
+    records = [r for r in records if not r.get("harness_error")]
     tasks = list(dict.fromkeys(r["task"] for r in records))
     lines = ["# tierflow benchmark", "",
              f"{len(records)} runs. Cost = Claude Code's own `total_cost_usd` (list-price estimate); "
-             "tokens from transcripts incl. subagents. Mean (min-max) over repeats.", "",
+             "tokens from transcripts incl. subagents. Mean (min-max) over repeats.", ""]
+    if excluded:
+        lines += [f"**{len(excluded)} run(s) excluded for harness errors:**", ""]
+        lines += [f"- {r['task']} / {r['arm']} / {r['rep']}: {str(r['harness_error'])[:160]}" for r in excluded]
+        lines.append("")
+    lines += [
              "| task | arm | cost $ | wall s | turns | model calls | correct | needs human |",
              "|---|---|---|---|---|---|---|---|"]
     for t in tasks:
@@ -290,8 +347,18 @@ def cmd_run(args) -> int:
     if not claude:
         print("claude CLI not found; pass --claude <path>", file=sys.stderr)
         return 2
-    run_dir = Path(args.out or (PACKAGE_ROOT / "bench" / "results" / datetime.now().strftime("%Y%m%d-%H%M%S")))
+    run_dir = Path(args.out or (Path.home() / "tierflow-bench" / datetime.now().strftime("%Y%m%d-%H%M%S")))
+    if inside_claude_dir(run_dir):
+        print(f"refusing --out {run_dir}: it is inside a .claude folder, where Claude Code blocks edits, so every "
+              "edit task would fail. Pick a folder outside .claude (and outside %TEMP% on Windows, where antivirus "
+              "may delete build outputs).", file=sys.stderr)
+        return 2
     run_dir.mkdir(parents=True, exist_ok=True)
+    # the CLI version decides which models the aliases resolve to, so it is part of every result
+    exe = [sys.executable, claude] if claude.endswith(".py") else [claude]
+    v = proc.run([*exe, "--version"], timeout=60)
+    cli_version = (v.stdout or "").strip().split(" ")[0] or None
+    print(f"claude CLI: {claude} ({cli_version or 'version unknown'})", flush=True)
     results = run_dir / "results.jsonl"
     records = []
     for rep in range(args.repeats):
@@ -302,6 +369,7 @@ def cmd_run(args) -> int:
                     rec = run_one(claude, suite, t, arm, rep, run_dir, args)
                 except (RuntimeError, OSError) as e:
                     rec = {"task": t["id"], "arm": arm, "rep": rep, "harness_error": str(e), "needs_human": True}
+                rec["cli_version"] = cli_version
                 records.append(rec)
                 with open(results, "a", encoding="utf-8") as fh:
                     fh.write(json.dumps(rec, default=str) + "\n")

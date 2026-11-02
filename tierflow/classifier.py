@@ -21,7 +21,8 @@ DISCOVERY = re.compile(
 # Lookups that are about code by their nature ("where is", "who calls"), versus general questions
 # ("explain", "how is X compared to Y") that are only about code when they name code.
 CODE_LOOKUP = re.compile(
-    r"\b(where (is|are|do|does)|find|locate|grep|who calls|usages? of|references? to|which (file|function|class|method|component|module)s?"
+    # bare "find"/"locate" are everyday words ("the issues you find"); they count only beside a code target
+    r"\b(where (is|are|do|does)|grep|who calls|usages? of|references? to|which (file|function|class|method|component|module)s?"
     r"|show me the (code|file|function|class))\b", re.I)
 CODE_NOUN = re.compile(
     r"\b(code|codebase|repo|repository|function|method|class|file|module|component|endpoint|api|controller|service|table"
@@ -131,8 +132,22 @@ def _hits(rx: re.Pattern, text: str) -> list[str]:
     return sorted({m.group(0).lower() for m in rx.finditer(text)})
 
 
+ATTACHED_BLOCK = re.compile(
+    r"<(artifact-view-context|system-reminder|task-notification|ide_selection|ide_opened_file|cross-session-message"
+    r"|agent-message|side-sessions-event|ci-monitor-event)\b[^>]*>.*?</\1(?:\s[^>]*)?>"
+    r"|<artifact-content-authored-by-others\s*/>"
+    r"|^\(The JSON line above is this viewer's live state.*?\)\s*$", re.S | re.M | re.I)
+
+
+def strip_attachments(prompt: str) -> str:
+    """Remove context blocks the app attaches to a user message (viewer state, reminders) and turns that
+    are not from the user at all (task notifications, messages from other sessions, subagent hand-backs).
+    They are not the user's words, and classifying them produced false 'high-risk: permissions' labels."""
+    return ATTACHED_BLOCK.sub(" ", prompt or "")
+
+
 def classify(prompt: str, cfg: Config, *, prior_failures: int = 0) -> Classification:
-    text = prompt.strip()
+    text = strip_attachments(prompt).strip()
     reasons: list[str] = []
     if not text or CHAT.match(text):
         return Classification("chat", "trivial", "low", "none", None, False, reasons=["conversational"])

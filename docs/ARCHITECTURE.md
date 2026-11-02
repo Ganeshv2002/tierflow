@@ -13,7 +13,7 @@ desktop app on a newer build, Python 3.11, ripgrep 14, dotnet, node._
 | Context isolation | Each subagent has a fresh context; only its final message returns | Read-heavy work goes to a cheap scout so the main context stays small |
 | Prompt caching | Automatic in Claude Code (system prompt, tools, history) | We keep injected text short and stable so it does not break cache prefixes |
 | Thinking control | `effort` (low…max) per agent; thinking can't be disabled on 5.5 models | Haiku agents run `effort: low`, architect `high` |
-| Planning | Plan mode, `opusplan` alias (Opus plans, Sonnet executes) | Recommended main-session setting for quality mode |
+| Planning | Plan mode, `opusplan` alias (Opus plans, Sonnet executes) | Not recommended for long sessions: each plan-mode toggle is a model switch, and a switch re-reads the whole conversation without cache hits. tierflow gets Opus planning from the `architect` subagent instead, which leaves the main cache intact |
 | Enforcement points | Hooks: `UserPromptSubmit` (inject context), `PreToolUse` (allow/ask/deny), `PostToolUse`, `SubagentStop`, `Stop` | Routing hint, budget gate, edit-scope gate, escalation advice, usage logging |
 | Packaging | Plugins (`agents/`, `skills/`, `hooks/hooks.json`, `${CLAUDE_PLUGIN_ROOT}`) | Whole orchestrator is one plugin; load with `--plugin-dir` or a local marketplace |
 | Hard cost cap | `claude -p --max-budget-usd` (print mode only) | Used by the benchmark runner |
@@ -101,9 +101,10 @@ input.
   later turn; the same reading in a Haiku scout costs ≈ $0.003 and only the summary returns.
 - Therefore: delegate **reading-heavy** work to the scout; do **small edits inline**; never spawn a
   subagent for a one-line change. The single biggest lever is the main-session model: in the author's own usage, sessions ran
-  100% on Opus. Running the main session on Sonnet (or `opusplan`) with
-  the Opus architect on call is where most savings come from — and the benchmark is how you verify
-  that quality holds.
+  100% on Opus. Running the main session on Sonnet with the Opus architect on call is where most
+  savings come from — and the benchmark is how you verify that quality holds. Choose the main model
+  at session start: a mid-session `/model` switch (or an `opusplan` plan-mode toggle) re-reads the
+  whole conversation uncached on the new model.
 
 ## 5. Context engineering
 

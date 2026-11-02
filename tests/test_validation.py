@@ -63,6 +63,18 @@ class ValidationTests(TempHomeCase):
         self.assertIn("UPDATE without WHERE", sql_risks("update Orders set Paid = 1\nGO"))
         self.assertEqual(sql_risks("-- DROP TABLE x\nSELECT 1"), [])
 
+    def test_dotnet_testing_platform_uses_project_flag(self):
+        # seen on a real .NET 10 repo: `dotnet test <proj>` ran zero tests (exit 5) under MTP
+        repo = self.git_repo()
+        self.write("global.json", '{"sdk":{"version":"10.0.301"},"test":{"runner":"Microsoft.Testing.Platform"}}', base=repo)
+        self.write("Core/Core.csproj", "<Project></Project>", base=repo)
+        self.write("Core/Money.cs", "public record Money(decimal A);\n", base=repo)
+        self.write("Core.Tests/Core.Tests.csproj", '<Project><ItemGroup><PackageReference Include="xunit.v3" />'
+                   '<ProjectReference Include="../Core/Core.csproj" /></ItemGroup></Project>', base=repo)
+        self.commit(repo)
+        cmds = [" ".join(s.argv) for s in plan(repo, load_config(), ["Core/Money.cs"]).steps]
+        self.assertIn("dotnet test --project Core.Tests/Core.Tests.csproj", cmds)
+
 
 class ProcTests(TempHomeCase):
     def test_timeout_kills(self):

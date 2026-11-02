@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .budget import check as budget_check
-from .classifier import classify, render_hint
+from .classifier import classify, render_hint, strip_attachments
 from .codemap import discover
 from .config import PACKAGE_ROOT, Config, home_dir, load_config
 from .escalation import advise, parse_outcome, tier_of_model
@@ -119,6 +119,11 @@ def on_prompt(payload: dict) -> dict | None:
     tp = payload.get("transcript_path")
     prompt = payload.get("prompt") or ""
     set_active(project, sid, tp)
+    user_text = strip_attachments(prompt).strip()
+    if not user_text:
+        # a notification, another session's message or a subagent report: nothing the user typed, so no
+        # hint and no new task (a hint here is pure token cost, and a new task breaks follow-up detection)
+        return None
     cost = _session_cost(payload, cfg)
 
     with Ledger(sid).update() as data:
@@ -148,7 +153,7 @@ def on_prompt(payload: dict) -> dict | None:
     rcfg = cfg.section("routing")
     bd = budget_check(cfg, cost, task_spent, None)
     over = bd.action != "allow"
-    if c.category == "chat" or not rcfg.get("inject_hint", True) or len(prompt.strip()) < rcfg.get("min_prompt_chars_for_hint", 15):
+    if c.category == "chat" or not rcfg.get("inject_hint", True) or len(user_text) < rcfg.get("min_prompt_chars_for_hint", 15):
         if over:
             return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
                                            "additionalContext": f"[tierflow] {bd.reason}. New delegations need approval."}}

@@ -10,7 +10,8 @@ The goal is to show that cost goes down **without** correctness going down. The 
 | main-session model | `--main-model` is passed to both arms |
 | hard spend cap | `claude -p --max-budget-usd` per run |
 | permissions | same `--permission-mode acceptEdits` and `--allowedTools` list |
-| plugin leakage | baseline passes `--settings` disabling an installed `tierflow@tierflow-local` |
+| plugin leakage | both arms pass `--settings` disabling an installed `tierflow@tierflow-local`; the optimized arm loads this source tree with `--plugin-dir` |
+| CLI version | pass `--claude <path>`; the version is printed at the start and stored in every record (`cli_version`) |
 | ordering effects | arm order alternates between repeats |
 
 Measured per run: Claude Code's `total_cost_usd`, `num_turns`, `duration_ms`, wall time, per-model
@@ -33,8 +34,13 @@ python orch.py bench run bench/tasks.toml --repeats 3 --main-model sonnet
 python orch.py bench run bench/tasks.toml --tasks bugfix,debug --main-model opus --mode economy
 
 # 4. re-render a report
-python orch.py bench report bench/results/<timestamp>
+python orch.py bench report ~/tierflow-bench/<timestamp>
 ```
+
+Results go to `~/tierflow-bench/<timestamp>` (or `--out`). The runner **refuses** an `--out` inside a
+`.claude` folder: Claude Code blocks edits there, so every edit task would silently "fail". On Windows also
+avoid `%TEMP%` (antivirus deleted build outputs there). A run whose transcript shows a blocked Edit/Write is
+recorded as `harness_error` and left out of the report.
 
 The bundled suite's caps add up to $7.25 per arm per repeat, so $14.50 per repeat for both arms
 (worst case; `--dry-run` prints the exact figure for your selection). Expect much less.
@@ -83,6 +89,11 @@ verify = ["npx", "vitest", "run", "web/src/__hidden__/export.test.ts"]
 ```
 
 ## Reading results honestly
+- Check `cli_version` and the model ids in `tokens`: the aliases (`sonnet`, `opus`) resolve to whatever
+  the CLI you ran knows. One v3 re-run silently used an old CLI (Opus/Sonnet 4.6) found first on `PATH`.
+- tierflow changes the start of the prompt (its agent list), so the first tierflow run in a suite cannot
+  reuse a cache that plain runs warmed and pays a cold write (~40k tokens). With few repeats that is
+  visible in the totals; report it rather than hide it.
 - Use at least 3 repeats. Model runs vary; with fewer repeats, treat cost differences under ~20% as noise.
 - Compare **cost per correct task**, not raw cost. A cheaper run that fails costs you a rerun.
 - If the optimized arm is cheaper but less correct on a category, change routing for that category
@@ -91,7 +102,55 @@ verify = ["npx", "vitest", "run", "web/src/__hidden__/export.test.ts"]
   growing in the main session (delegate more reading). Many Haiku calls that end in escalation mean
   the mechanic gets work that needs judgement (tighten the classifier).
 
-## Results (2026-11-01, Claude Code CLI 2.1.76: `sonnet` = Sonnet 4.6, `opus` = Opus 4.6, `haiku` = Haiku 4.5)
+## Results v3 (2026-11-02, CLI 2.1.309: `opus` = Opus 5.5, `sonnet` = Sonnet 5.5)
+
+Three arms, three codebases, two repeats, hidden checks:
+
+- **Python**: NaukriApply (public, ~5k lines, pytest), suite in `bench/suites/naukri/`.
+- **TypeScript**: private app (~23k lines, 433 vitest tests). Suite not published.
+- **C#/.NET 10**: private service (~11.7k lines, xUnit v3 on Microsoft.Testing.Platform). Suite not published.
+
+Tasks: `search` (code lookup, answer checked), `bugfix` (planted bug described by its symptom), `debug`
+(cross-module, described by its symptom). Every check fails on the untouched snapshot and passes with a
+reference fix. Arms: plain Opus main, plain Sonnet main (the control rounds 1-3 lacked), Sonnet main +
+tierflow. Totals below are like-for-like (16 runs per arm: the TypeScript `search` task has no Sonnet runs,
+so it is left out of every arm).
+
+| arm | cost (16 runs) | correct | $ per correct task | wall | delegations / escalations |
+|---|---|---|---|---|---|
+| plain Opus | $4.14 | 16/16 | $0.259 | 531 s | - |
+| plain Sonnet | $1.53 (-63%) | 16/16 | $0.095 | 470 s | - |
+| Sonnet + tierflow | $1.79 (+17% vs Sonnet) | 16/16 | $0.112 | 452 s | 0 / 0 |
+
+Mean cost per run by task:
+
+| task | Opus | Sonnet | Sonnet + tierflow |
+|---|---|---|---|
+| search (Python, C#) | $0.231 | $0.076 | $0.103 |
+| bugfix (all three) | $0.229 | $0.096 | $0.116 |
+| debug (all three) | $0.308 | $0.108 | $0.113 |
+
+Sonnet vs Opus per codebase: Python -69%, C# -62%, TypeScript -57% (bugfix + debug).
+
+What this shows, with n = 2 (differences under ~20% may be noise):
+- **The main-session model is the lever.** Sonnet 5.5 solved every task Opus 5.5 solved, for about a third
+  of the cost, on all three stacks.
+- **tierflow added nothing measurable on top of Sonnet** on these short tasks: 0 delegations, 0 escalations,
+  same correctness. Its +17% is mostly two runs that started on a cold cache (the first tierflow run of the
+  Python suite, for `search` and `bugfix`: ~40k tokens written, none read; $0.17/$0.19 vs $0.08/$0.09).
+  Without them the gap is about +5%. Steady-state overhead: ~850 more tokens written on the first request
+  (tierflow's agent list), ~530 fewer read from the shared prefix.
+- Rounds 1-3's possible correctness gain (plain Sonnet once named a function that does not exist) did not
+  reproduce: plain Sonnet was 16/16.
+- Not measured: long interactive sessions, which is where delegation out of an expensive context could pay.
+
+Invalid runs, excluded and replaced: the first v3 attempt put workspaces under `~/.claude/...`; CLI 2.1.309
+blocked every edit there (20+ transcripts show "requested permissions to edit ... which is a sensitive
+file"), so all bugfix/debug runs ended with an empty diff. A first re-run then used CLI 2.1.76 from `PATH`.
+Its results (Opus 4.6 $0.197/run, Sonnet 4.6 $0.142, Sonnet 4.6 + tierflow $0.139; 12/12 correct each) agree
+with the conclusion but are not mixed into the table. No usage-limit cut-offs occurred.
+
+## Earlier results (2026-11-01, Claude Code CLI 2.1.76: `sonnet` = Sonnet 4.6, `opus` = Opus 4.6, `haiku` = Haiku 4.5)
 
 The real-repo suite ran on a private ~23k-line TypeScript codebase (111 files, 433 vitest tests, JSON codebase
 map). Its task files are not published because they contain excerpts of that code; the format is shown above.
@@ -128,6 +187,11 @@ search -16% via the Haiku scout), **plain Sonnet main session $0.459 (-41%)**. T
 dominant lever; delegation from an Opus main session only pays for lookups.
 
 ### Default setup vs recommended setup (private TypeScript repo, 4 tasks x 3 repeats)
+
+> Correction (v3): this round had no plain-Sonnet arm. A one-repeat plain-Sonnet run cost about the same
+> per 4 tasks as Sonnet + tierflow, and v3's control confirms it: the saving below is the main-model switch,
+> not tierflow.
+
 
 | setup | cost (CLI models) | at current prices (est.) | correct | wall |
 |---|---|---|---|---|

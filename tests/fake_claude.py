@@ -9,6 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bench_reference  # noqa: E402
 
 args = sys.argv[1:]
+if "--version" in args:
+    print("0.0.0-fake (Claude Code)")
+    sys.exit(0)
 prompt = args[args.index("-p") + 1]
 optimized = "--plugin-dir" in args
 keys = {"reordering": "search", "calculate_total": "rename", "test_bulk_discount": "bugfix", "to_csv": "feature",

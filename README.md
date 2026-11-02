@@ -10,26 +10,30 @@ as they are. Design and trade-offs: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ## Measured result
 
-Real private TypeScript repo (~23k lines, 433 tests), 4 tasks (lookup, bug fix, cross-module debugging,
-feature) x 3 repeats, identical repo snapshots, hidden tests decide correctness
-([method](docs/BENCHMARKING.md)):
+Three codebases (Python, TypeScript, C#/.NET 10), three tasks each (code lookup, planted bug, cross-module
+debugging; bugs described only by their symptom), 2 repeats, identical snapshots, hidden checks decide
+correctness ([method and every run](docs/BENCHMARKING.md)). Claude Code CLI 2.1.309, Opus 5.5 / Sonnet 5.5:
 
-| setup | cost (12 runs) | correct | wall time |
+| main session | cost (16 runs) | correct | $ per correct task |
 |---|---|---|---|
-| plain Claude Code, Opus main session | $2.33 | 12/12 | 582 s |
-| **Sonnet main session + tierflow** | **$1.57 (-32.5%)** | **12/12** | 631 s |
+| plain Claude Code, Opus | $4.14 | 16/16 | $0.26 |
+| plain Claude Code, Sonnet | $1.53 (-63%) | 16/16 | $0.10 |
+| Sonnet + tierflow | $1.79 (+17% vs plain Sonnet) | 16/16 | $0.11 |
 
-Per task: lookup -8%, bug fix -25%, cross-module debug -51%, feature -26%. Costs are Claude Code's own
-`total_cost_usd` (list-price estimate) with the CLI's models at the time (Opus 4.6 / Sonnet 4.6 / Haiku 4.5).
-Re-pricing the same token counts at current model prices gives about -46%.
+**The saving is the main-session model.** Sonnet matched Opus on every task, on all three stacks, for about a
+third of the cost. **tierflow added nothing measurable on top of Sonnet** for these short tasks: it never
+delegated or escalated, and most of its +17% came from two runs that started on a cold prompt cache
+(about +5% without them, inside the noise of n = 2). An earlier round (older models, one repo) reported
+-32.5% for Sonnet + tierflow against Opus; it had no plain-Sonnet control, and that saving was the model switch.
 
-What did **not** work, also measured: routing hints that the model was free to ignore (0 delegations, +9%),
-and delegating everything out of an Opus session (12/12 delegations, still +6%: each subagent re-reads the
-files in a fresh context). See [docs/BENCHMARKING.md](docs/BENCHMARKING.md) for every run.
+What tierflow is for, then: guard rails (budgets, the Opus gate, overlapping-edit lock), deterministic
+search and affected-test validation, and per-step cost tracking. Its delegation is aimed at long,
+reading-heavy Opus sessions, which this benchmark does not measure yet. Also measured and not helpful:
+hints the model may ignore (+9%) and delegating everything out of an Opus session (+6%, older models).
 
 ## Where the tokens go, and what tierflow changes
 
-Measured on the Opus runs: **67% of a task's cost was cache writes** (everything the main session reads is
+Measured on the earlier Opus 4.6 runs: **67% of a task's cost was cache writes** (everything the main session reads is
 written into its prompt cache at the main model's price), 18% output, 14% cache re-reads. So:
 
 1. **The main-session model is the biggest lever.** tierflow recommends Sonnet as the main model and
@@ -71,7 +75,10 @@ Recommended: make Sonnet the default main model in `~/.claude/settings.json`:
 ```json
 { "model": "sonnet" }
 ```
-Switch per session with `/model opus` when you want it. Turn tierflow off with
+Pick the model when a session **starts** (`claude --model opus` for a hard session). Avoid `/model` switches
+mid-session: each model has its own prompt cache, so a switch re-reads the whole conversation uncached (and with
+`opusplan` every plan-mode toggle is such a switch). For one hard step inside a Sonnet session, let tierflow call
+the `architect` agent instead: subagents leave the main session's cache intact. Turn tierflow off with
 `claude plugin disable tierflow@tierflow-local`.
 
 State and metrics are kept in `~/.claude/tierflow/` (override with `TIERFLOW_HOME`).

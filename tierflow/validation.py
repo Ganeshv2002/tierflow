@@ -39,6 +39,14 @@ def sql_risks(text: str) -> list[str]:
     return list(dict.fromkeys(risks))
 
 
+def uses_testing_platform(root: Path) -> bool:
+    try:
+        data = json.loads((root / "global.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return str((data.get("test") or {}).get("runner", "")).lower() == "microsoft.testing.platform"
+
+
 def project_python(root: Path) -> str:
     """Prefer the project's virtualenv interpreter so tests see its dependencies."""
     for cand in (".venv/Scripts/python.exe", "venv/Scripts/python.exe", ".venv/bin/python", "venv/bin/python"):
@@ -170,8 +178,12 @@ def plan(root: str | Path, cfg: Config, changed: list[str] | None = None) -> Val
                      "owning project of changed files"))
         if vcfg.get("test_affected_modules", True):
             tests = [p for p in cs_projects + downstream if is_test_project(root, p)]
+            mtp = uses_testing_platform(root)
             for p in tests:
-                add(Step(f"dotnet test {p}", ["dotnet", "test", p, "--nologo", "-v", "q"], str(root), "test", p,
+                # .NET 10 repos that opt into Microsoft.Testing.Platform (global.json "test.runner") need
+                # `--project`; the classic form builds the project and then runs zero tests (exit 5).
+                argv = ["dotnet", "test", "--project", p] if mtp else ["dotnet", "test", p, "--nologo", "-v", "q"]
+                add(Step(f"dotnet test {p}", argv, str(root), "test", p,
                          "test project covering changed code" if p not in cs_projects else "changed test project"))
             if not tests:
                 rep.warnings.append("no .NET test project references the changed projects")
@@ -256,6 +268,9 @@ def execute(rep: ValidationReport, cfg: Config) -> ValidationReport:
         res = StepResult(s.name, s.kind, r.ok, r.returncode, r.duration_s, r.timed_out)
         if not r.ok:
             res.excerpt = _excerpt(r.stdout + "\n" + r.stderr, max_lines)
+            if s.argv[:2] == ["dotnet", "test"] and r.returncode == 5:
+                res.excerpt.insert(0, "zero tests ran (exit 5): the test command found no tests - check the runner/filter, "
+                                      "this is not a test failure in the code")
             if s.kind == "build" and s.project:
                 failed_builds.add(s.project)
         rep.results.append(res)

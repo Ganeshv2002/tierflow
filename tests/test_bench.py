@@ -54,6 +54,39 @@ class BenchRunner(TempHomeCase):
         report = (self.tmp / "results" / "report.md").read_text(encoding="utf-8")
         self.assertIn("cost change: -50.0%", report)
 
+    def test_refuses_out_inside_dot_claude(self):
+        out = self.tmp / ".claude" / "results"
+        self.assertEqual(bench.cmd_run(self.args(out=str(out))), 2)
+        self.assertFalse(out.exists())
+
+    def test_blocked_edit_is_harness_error(self):
+        def entry(role, block):
+            return json.dumps({"type": role, "message": {"role": role, "content": [block]}})
+        tp = self.tmp / "s1.jsonl"
+        lines = [
+            entry("assistant", {"type": "tool_use", "id": "t1", "name": "Edit", "input": {}}),
+            entry("user", {"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+                           "content": "Claude requested permissions to edit C:\\x\\.claude\\a.py which is a sensitive file."}),
+            entry("assistant", {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}),
+            entry("user", {"type": "tool_result", "tool_use_id": "t2", "is_error": True,
+                           "content": "Claude requested permissions to use Bash, but you haven't granted it yet."}),
+        ]
+        tp.write_text("\n".join(lines), encoding="utf-8")
+        sub = self.tmp / "s1" / "subagents"
+        sub.mkdir(parents=True)
+        (sub / "agent-a.jsonl").write_text("\n".join(lines[:2]), encoding="utf-8")
+        d = bench.permission_denials(tp)
+        self.assertEqual((d["edit"], d["other"]), (2, 1))
+        self.assertIn("sensitive file", d["example"])
+
+    def test_report_excludes_harness_errors(self):
+        ok = {"task": "search", "arm": "baseline", "rep": 0, "cost_usd_cli": 1.0, "correct": True}
+        bad = {"task": "bugfix", "arm": "baseline", "rep": 0, "cost_usd_cli": 9.0, "correct": False,
+               "harness_error": "edit blocked by the CLI 1x"}
+        report = bench.summarize([ok, bad])
+        self.assertIn("1 run(s) excluded", report)
+        self.assertIn("total $1.00, correct 1/1", report)
+
     def test_dry_run_spends_nothing(self):
         self.assertEqual(bench.cmd_run(self.args(dry_run=True, claude=None)), 0)
         self.assertFalse((self.tmp / "results").exists())
