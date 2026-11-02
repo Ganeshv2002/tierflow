@@ -229,8 +229,8 @@ def session_usage(transcript_path: str | Path, cfg: Config, *, incremental: bool
     return SessionUsage(main, subs)
 
 
-def last_model(transcript_path: str | Path, tail_bytes: int = 262_144) -> str | None:
-    """Model of the most recent main-session response (reads only the file tail)."""
+def _last_main_response(transcript_path: str | Path, tail_bytes: int = 262_144) -> dict | None:
+    """The most recent main-session model response (reads only the file tail)."""
     p = Path(transcript_path)
     try:
         with open(p, "rb") as fh:
@@ -245,7 +245,24 @@ def last_model(transcript_path: str | Path, tail_bytes: int = 262_144) -> str | 
             d = json.loads(raw)
         except ValueError:
             continue
-        m = (d.get("message") or {}).get("model")
+        msg = d.get("message") or {}
+        m = msg.get("model")
         if d.get("type") == "assistant" and m and m != "<synthetic>" and not d.get("isSidechain"):
-            return m
+            return msg
     return None
+
+
+def last_model(transcript_path: str | Path, tail_bytes: int = 262_144) -> str | None:
+    """Model of the most recent main-session response (reads only the file tail)."""
+    msg = _last_main_response(transcript_path, tail_bytes)
+    return msg.get("model") if msg else None
+
+
+def last_context(transcript_path: str | Path, tail_bytes: int = 262_144) -> tuple[str | None, int | None]:
+    """(model, context tokens) of the most recent main-session request: everything it sent (fresh input +
+    cache read + cache write) plus what it wrote, i.e. roughly what the next request has to re-read."""
+    msg = _last_main_response(transcript_path, tail_bytes)
+    if not msg or not msg.get("usage"):
+        return (msg or {}).get("model"), None
+    u = normalize_usage(msg["usage"])
+    return msg.get("model"), u["input"] + u["cache_read"] + u["cache_write_5m"] + u["cache_write_1h"] + u["output"]

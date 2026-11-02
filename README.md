@@ -122,7 +122,32 @@ reservation would exceed a limit, it needs approval; cheap Haiku delegations are
 | `validate [--files ...] [--dry-run]` | build/typecheck/tests for affected + downstream projects; compact digest |
 | `usage [--transcript p]` | tokens (incl. cache and thinking where reported) and cost for a session, incl. subagents |
 | `report [--since days]` | cost per model, per agent, per task and per step; retries, escalations |
+| `tune [--since days] [--apply ID...] [--revert]` | learns from your own metrics: evidence + suggested config changes (see below) |
 | `bench run/report` | baseline vs tierflow benchmark ([docs/BENCHMARKING.md](docs/BENCHMARKING.md)) |
+
+## Learning from your own usage
+
+Every request re-reads the whole conversation, so cost per request grows with the session: in the author's
+own logs it went from $0.06 per model request early in a session to $0.20 past 150 requests. Two things
+use that:
+
+- **Context-size warning.** When a session's context passes `session.warn_context_tokens` (default 200k),
+  tierflow shows *you* one line suggesting `/compact` or a fresh session with a short hand-over note. It is a
+  `systemMessage`, so it costs no model tokens, and it repeats only after the context grew another
+  `rewarn_every_tokens` (default 100k).
+- **`orch tune`.** The hooks log, per prompt: category, main model, context size at the start, whether a
+  hint was sent and followed, agents used, cost until the next prompt, and an outcome signal (a failed check
+  or a "still failing" follow-up = failed; moving on = ok). `orch tune` groups prompts by context size
+  before comparing anything, and only suggests a change with `tune.min_samples` (10) per group and a
+  `tune.min_difference` (25%) cost gap. Suggestions it can make: switch off hints for a category whose hints
+  are ignored or whose delegations cost more than inline work, warn about context earlier, and re-size the
+  budget reservation per tier. It also lists likely misclassifications.
+
+Nothing changes on its own: `orch tune --apply <id>` writes the chosen suggestion to
+`~/.claude/tierflow/tuned.toml`, which accepts only those keys and is overridden by your `config.toml`;
+`orch tune --revert` deletes it, and every applied change is logged with its evidence in `tune-history.jsonl`.
+It never switches the main model (a mid-session switch re-reads everything uncached) and never routes code
+to Haiku.
 
 ## Subscription vs API billing
 

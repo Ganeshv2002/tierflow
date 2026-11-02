@@ -24,7 +24,8 @@ from .codemap import discover
 from .config import PACKAGE_ROOT, Config, home_dir, load_config
 from .escalation import advise, parse_outcome, tier_of_model
 from .ledger import FOLLOW_UP, Ledger, emit, now_iso, prior_failures, set_active, start_or_continue_task
-from .usage import last_model, long_path, scan_file, session_usage
+from .pricing import rates_for
+from .usage import last_context, last_model, long_path, scan_file, session_usage
 
 ORCH_CMD = f'python "{(PACKAGE_ROOT / "orch.py").as_posix()}"'
 STALE_SECONDS = 3600
@@ -142,22 +143,56 @@ def on_prompt(payload: dict) -> dict | None:
             task["classification"] = summary
         data["last_cost"] = cost
         task_spent = cost - task.get("cost_at_start", 0.0)
-        main_model = (last_model(tp) if tp else None) or data.get("main_model")
+        ctx_model, ctx_tokens = last_context(tp) if tp else (None, None)
+        main_model = ctx_model or data.get("main_model")
         if main_model:
             data["main_model"] = main_model
         main_tier = tier_of_model(main_model, cfg)
+        warning = context_warning(cfg, data, ctx_tokens, main_model)
 
-    emit("prompt", session=sid, task=task["key"], new_task=is_new, category=c.category, complexity=c.complexity,
-         risk=c.risk, tier=c.tier, session_cost=round(cost, 4), project=project)
-
-    rcfg = cfg.section("routing")
     bd = budget_check(cfg, cost, task_spent, None)
-    over = bd.action != "allow"
-    if c.category == "chat" or not rcfg.get("inject_hint", True) or len(user_text) < rcfg.get("min_prompt_chars_for_hint", 15):
-        if over:
-            return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                           "additionalContext": f"[tierflow] {bd.reason}. New delegations need approval."}}
+    hint = _prompt_hint(cfg, c, bd, user_text, main_tier, project)
+    emit("prompt", session=sid, task=task["key"], new_task=is_new, category=c.category, complexity=c.complexity,
+         risk=c.risk, tier=c.tier, session_cost=round(cost, 4), project=project, main_model=main_model,
+         context_tokens=ctx_tokens, follow_up=follow_up, hint=bool(hint), hinted_agent=c.agent if hint else None,
+         context_warning=bool(warning))
+    out: dict = {}
+    if hint:
+        out["hookSpecificOutput"] = {"hookEventName": "UserPromptSubmit", "additionalContext": hint}
+    if warning:
+        out["systemMessage"] = warning      # shown to the user only: costs no model tokens
+    return out or None
+
+
+def context_warning(cfg: Config, data: dict, ctx_tokens: int | None, model: str | None) -> str | None:
+    """One line for the user when the session's context is large; repeated only after it grew further."""
+    s = cfg.section("session")
+    threshold = int(s.get("warn_context_tokens", 0) or 0)
+    if not threshold or not ctx_tokens:
         return None
+    if ctx_tokens < threshold:
+        data.pop("context_warned_at", None)          # e.g. after /compact: warn again next time it grows
+        return None
+    step = int(s.get("rewarn_every_tokens", 0) or 0)
+    last = data.get("context_warned_at")
+    if last and (not step or ctx_tokens < last + step):
+        return None
+    data["context_warned_at"] = ctx_tokens
+    r = rates_for(model, cfg) if model else None
+    per = (f" (at least ${ctx_tokens * r['cache_read'] / 1e6:.2f} per model request on {model}, even from cache)"
+           if r and r.get("cache_read") else "")
+    return (f"tierflow: this session's context is about {ctx_tokens // 1000}k tokens and every model request "
+            f"re-reads it{per}. If the current task is done, start a fresh session with a short hand-over note, "
+            "or run /compact.")
+
+
+def _prompt_hint(cfg: Config, c, bd, user_text: str, main_tier: str | None, project: str) -> str | None:
+    rcfg = cfg.section("routing")
+    over = bd.action != "allow"
+    if (c.category == "chat" or not rcfg.get("inject_hint", True)
+            or c.category in (rcfg.get("hint_categories_off") or [])
+            or len(user_text) < rcfg.get("min_prompt_chars_for_hint", 15)):
+        return f"[tierflow] {bd.reason}. New delegations need approval." if over else None
 
     # Main session already on the right tier for routine work: say nothing (every hint token is paid for).
     if main_tier == "standard" and c.tier == "standard" and not c.plan_first and not over:
@@ -168,9 +203,8 @@ def on_prompt(payload: dict) -> dict | None:
         cm = discover(project, cfg.section("context").get("extra_map_paths"))
         if cm.found:
             map_line = f"codebase map exists ({cm.describe()}): tell the scout to start there"
-    hint = render_hint(c, cfg, budget_line=bd.line(cfg) if over else None, map_line=map_line, extra=extra,
+    return render_hint(c, cfg, budget_line=bd.line(cfg) if over else None, map_line=map_line, extra=extra,
                        main_tier=main_tier)
-    return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": hint}}
 
 
 def on_pre_agent(payload: dict) -> dict | None:
@@ -398,8 +432,9 @@ def on_stop(payload: dict) -> dict | None:
     total = su.total
     data = Ledger(sid).read()
     task = data.get("task") or {}
+    model, ctx_tokens = last_context(tp)
     emit("turn", session=sid, task=task.get("key"), category=(task.get("classification") or {}).get("category"),
-         cost_total=round(total.cost_usd, 6), cost_main=round(su.main.cost_usd, 6),
+         main_model=model, context_tokens=ctx_tokens, cost_total=round(total.cost_usd, 6), cost_main=round(su.main.cost_usd, 6),
          cost_subagents=round(total.cost_usd - su.main.cost_usd, 6), requests=total.requests,
          models={k: {"requests": m.requests, "input": m.input, "output": m.output, "cache_read": m.cache_read,
                      "cache_write": m.cache_write_5m + m.cache_write_1h, "thinking": m.thinking,

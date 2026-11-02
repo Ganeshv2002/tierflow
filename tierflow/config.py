@@ -128,6 +128,44 @@ class Config:
         return {"economy": "ask", "balanced": "warn", "quality": "allow"}[self.mode]
 
 
+def tuned_config_path() -> Path:
+    return home_dir() / "tuned.toml"
+
+
+# The only keys `orch tune --apply` may set. Anything else in tuned.toml is ignored, so the file can never
+# change modes, pricing, gates or budgets' limits.
+TUNABLE = {
+    ("session", "warn_context_tokens"): int,
+    ("session", "rewarn_every_tokens"): int,
+    ("routing", "hint_categories_off"): list,
+    **{("budgets.reservation_usd", t): float for t in ("light", "standard", "reasoning")},
+}
+
+
+def _apply_tuned(data: dict, tuned: dict, warnings: list[str]) -> dict:
+    out = copy.deepcopy(data)
+    flat = {}
+    for section, values in tuned.items():
+        if section == "budgets" and isinstance(values, dict):
+            for k, v in (values.get("reservation_usd") or {}).items():
+                flat[("budgets.reservation_usd", k)] = v
+            continue
+        for k, v in (values.items() if isinstance(values, dict) else []):
+            flat[(section, k)] = v
+    for (section, key), v in flat.items():
+        typ = TUNABLE.get((section, key))
+        ok = typ is not None and (isinstance(v, (int, float)) and not isinstance(v, bool) if typ in (int, float)
+                                  else isinstance(v, list) and all(isinstance(x, str) for x in v))
+        if not ok:
+            warnings.append(f"tuned config: ignored {section}.{key}")
+            continue
+        node = out
+        for part in section.split("."):
+            node = node.setdefault(part, {})
+        node[key] = typ(v) if typ in (int, float) else list(v)
+    return out
+
+
 def _validate(data: dict, warnings: list[str]) -> None:
     if data["orchestrator"].get("mode") not in MODES:
         warnings.append(f"invalid mode {data['orchestrator'].get('mode')!r}; using 'balanced'")
@@ -144,6 +182,15 @@ def load_config(project_dir: str | Path | None = None, *, mode_override: str | N
     warnings: list[str] = []
     sources = [str(DEFAULT_CONFIG)]
     data = _load_toml(DEFAULT_CONFIG)
+
+    # learned values (orch tune --apply) sit between the defaults and your own config: yours always wins
+    tpath = tuned_config_path()
+    if tpath.is_file():
+        try:
+            data = _apply_tuned(data, _load_toml(tpath), warnings)
+            sources.append(str(tpath))
+        except (tomllib.TOMLDecodeError, OSError) as e:
+            warnings.append(f"tuned config unreadable ({tpath}): {e}")
 
     upath = user_config_path()
     if upath.is_file():

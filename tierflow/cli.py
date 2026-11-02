@@ -163,6 +163,28 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_tune(args) -> int:
+    from . import tune
+    if args.revert:
+        print("removed tuned.toml" if tune.revert() else "nothing to revert (no tuned.toml)")
+        return 0
+    cfg = load_config(_root(args))
+    rep = tune.run(cfg, args.since)
+    if args.apply:
+        try:
+            done = tune.apply(rep, args.apply)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
+        print(f"applied: {', '.join(done)} -> {tune.tuned_config_path()} (undo: orch tune --revert)")
+        return 0
+    if args.json:
+        for sug in rep["suggestions"]:
+            sug["patch"] = {f"{a}.{b}": v for (a, b), v in sug["patch"].items()}
+    _print(rep, args.json, tune.render(rep))
+    return 0
+
+
 def cmd_config(args) -> int:
     cfg = load_config(_root(args), mode_override=args.mode)
     if args.json:
@@ -220,6 +242,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("report", help="aggregate metrics across sessions")
     sp.add_argument("--since", type=float, help="days"); sp.add_argument("--session"); sp.add_argument("--json", action="store_true")
     sp.set_defaults(fn=cmd_report)
+
+    sp = sub.add_parser("tune", help="learn from your own metrics: show evidence and suggested config changes")
+    sp.add_argument("--since", type=float, help="days of metrics to use (default: all)")
+    sp.add_argument("--apply", nargs="+", metavar="ID", help="write these suggestions to tuned.toml")
+    sp.add_argument("--revert", action="store_true", help="delete tuned.toml")
+    common(sp); sp.set_defaults(fn=cmd_tune)
 
     sp = sub.add_parser("config", help="show effective configuration")
     sp.add_argument("--mode"); common(sp); sp.set_defaults(fn=cmd_config)

@@ -18,6 +18,9 @@ min_prompt_chars_for_hint = 15
 # What to do when an Opus-tier delegation happens without a complex/high-risk classification or a
 # recorded escalation. "auto" = economy: ask, balanced: warn, quality: allow.
 opus_gate = "auto"           # auto | allow | warn | ask | deny
+# Categories that never get a routing hint (the main session just does the work). `orch tune` suggests
+# entries here when your own metrics show a category's hints are ignored or its delegations cost more.
+hint_categories_off = []
 
 # Subagent name -> tier and whether it edits files. Names without a namespace match plugin agents too.
 [agents.scout]
@@ -56,6 +59,18 @@ max_files = 12
 max_hits_per_file = 4
 exclude_dirs = ["node_modules", ".git", "bin", "obj", "dist", "build", "out", ".next", "coverage",
                 "__pycache__", ".venv", "venv", "packages", ".vs", ".idea", "target"]
+
+[session]
+# Every request re-reads the whole conversation, so cost per request grows with the session. Once the
+# context passes this many tokens, tierflow shows you (not the model: no tokens) a one-line suggestion to
+# /compact or start a fresh session. 0 = off.
+warn_context_tokens = 200000
+rewarn_every_tokens = 100000  # warn again only after the context grew this much more
+
+# `orch tune`: how much evidence a suggestion needs.
+[tune]
+min_samples = 10              # prompts (or agent runs) per compared group
+min_difference = 0.25         # relative cost difference before anything is suggested
 
 [validation]
 timeout_seconds = 900
