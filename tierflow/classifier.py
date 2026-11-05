@@ -27,7 +27,24 @@ CODE_LOOKUP = re.compile(
 CODE_NOUN = re.compile(
     r"\b(code|codebase|repo|repository|function|method|class|file|module|component|endpoint|api|controller|service|table"
     r"|stored procedure|query|schema|tests?|bug|error|exception|stack trace|config|variable|import|implemented|defined|called"
-    r"|parser|handler|helper|util|utility|hook|middleware|model|route|router|script|package|library|dependency|regex|algorithm)s?\b", re.I)
+    r"|parser|handler|helper|util|utility|hook|middleware|route|router|script|package|library|dependency|regex|algorithm)s?\b", re.I)
+
+# Prompts that use engineering words but are not engineering tasks. Each fired a code-routing hint in real use:
+# "update me when done", "will it improve token usage?", "install/integrate this plugin".
+CONVERSATIONAL = re.compile(
+    r"\b(update|tell|inform|notify|remind|ping|brief|keep) (me|us)\b|\blet (me|us) know\b|\bkeep (me|us) (posted|updated|in the loop)\b", re.I)
+EXPLAIN = re.compile(
+    r"^\s*(please\s+|can you\s+|could you\s+)?(explain|describe|walk me through|tell me (about|how|why)|what does .{0,80} mean)\b", re.I)
+# a request addressed to the assistant ("can you fix...", "please add...") is a task even when it ends with "?"
+REQUEST = re.compile(r"\b(can|could|would|will) you\b|\bplease\b|\bi (want|need) you to\b|\bgo ahead\b|\blet'?s\b|\bwe need to\b", re.I)
+# installing or configuring tools for the assistant itself, not changing the user's code
+TOOLING = re.compile(
+    r"\b(install|integrate|add|set ?up|enable|connect|configure|remove|uninstall|update)\b.{0,80}"
+    r"\b(skills?|plugins?|mcp( servers?)?|marketplace|extensions?|claude code)\b", re.I)
+CODE_WORDS_STRICT = re.compile(
+    r"\b(codebase|repo|repository|function|method|class|module|tests?|endpoint|api|controller|service|component|bug|stack trace)s?\b", re.I)
+# explaining a failure is debugging, not explanation
+FAILURE = re.compile(r"\b(intermittent(ly)?|flaky|race|deadlock|leak|fails?|failing|failed|crash(es|ing)?|sometimes|occasionally|randomly|regression|bug)\b", re.I)
 
 MECHANICAL = re.compile(
     r"\b(rename|re-?format|format|prettier|sort imports|organi[sz]e imports|add (an? )?import|remove unused|delete unused|unused imports"
@@ -174,8 +191,27 @@ def classify(prompt: str, cfg: Config, *, prior_failures: int = 0) -> Classifica
     sig["code_ref"] = bool(sig["paths"] or sig["identifiers"] or CODE_NOUN.search(prose))
     is_question = text.rstrip().endswith("?")
 
+    # --- not engineering work: say nothing rather than route it ---------------------------------
+    def conversation(why: str) -> Classification:
+        return Classification("chat", "trivial", "low", "none", None, False, reasons=[why], signals=sig)
+
+    explain = bool(EXPLAIN.match(text)) and not sig["strong_standard"] and not sig["mechanical"] and not FAILURE.search(prose)
+    if not sig["paths"] and TOOLING.search(prose) and not CODE_WORDS_STRICT.search(prose):
+        return conversation("tooling request: no routing needed")
+    if not sig["paths"] and not sig["strong_standard"]:
+        if CONVERSATIONAL.search(prose) and not sig["code_ref"]:
+            return conversation("status or communication request")
+        if (is_question and not REQUEST.search(prose) and not sig["code_ref"] and not sig["code_lookup"]
+                and not sig["complex"] and not sig["mechanical"]):
+            return conversation("question without a code target")
+    if explain and not sig["code_ref"]:
+        return conversation("explanation request without a code target")
+
     # --- base category ---------------------------------------------------------------------
-    if sig["complex"]:
+    if explain:
+        category, level = "discovery", "simple"
+        reasons.append("explanation request about code")
+    elif sig["complex"]:
         category, level = "complex", "complex"
         reasons.append(f"complex signals: {', '.join(sig['complex'][:3])}")
     elif sig["mechanical"] and not sig["strong_standard"]:

@@ -207,6 +207,44 @@ def _prompt_hint(cfg: Config, c, bd, user_text: str, main_tier: str | None, proj
                        main_tier=main_tier)
 
 
+AGENT_TIERS = ("light", "standard", "reasoning")
+
+
+def _models_path() -> Path:
+    return home_dir() / "agent-models.json"
+
+
+def learned_tier(agent: str) -> str | None:
+    """Tier an unconfigured agent type was most often seen running on (None = never observed)."""
+    try:
+        seen = json.loads(_models_path().read_text(encoding="utf-8")).get(agent.rsplit(":", 1)[-1]) or {}
+    except (OSError, ValueError):
+        return None
+    best = max(AGENT_TIERS, key=lambda t: (seen.get(t, 0), t == "standard"))
+    return best if seen.get(best, 0) > 0 else None
+
+
+def learn_tier(agent: str, totals, cfg: Config) -> None:
+    """Remember which tier an unconfigured agent type actually ran on (its main model by request count)."""
+    if not agent or not totals or not totals.models or cfg.agent_info(agent):
+        return
+    model = max(totals.models.items(), key=lambda kv: kv[1].requests)[0]
+    tier = tier_of_model(model, cfg)
+    if tier not in AGENT_TIERS:
+        return
+    path = _models_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        counts = data.setdefault(agent.rsplit(":", 1)[-1], {})
+        counts[tier] = counts.get(tier, 0) + 1
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+        os.replace(tmp, path)
+    except (OSError, ValueError):
+        pass
+
+
 def on_pre_agent(payload: dict) -> dict | None:
     project = _project(payload)
     cfg = load_config(project)
@@ -215,8 +253,13 @@ def on_pre_agent(payload: dict) -> dict | None:
     agent = ti.get("subagent_type") or "general-purpose"
     info = cfg.agent_info(agent) or {}
     tier = tier_of_model(ti.get("model"), cfg) or info.get("tier")
-    if tier in (None, "inherit"):
+    if tier == "inherit":                              # configured as "runs on the session's model"
         tier = tier_of_model(last_model(payload.get("transcript_path") or ""), cfg) or "standard"
+    elif tier is None:
+        # An agent type we have no config for (web-fetch, plugin agents...) has its own model: do not assume
+        # it is the main one. Use what it was last seen running on, else leave the tier unknown (no Opus gate,
+        # no reservation) rather than guess; the real model is recorded when it stops.
+        tier = learned_tier(agent)
 
     action, reasons, ctx = "allow", [], []
 
@@ -284,6 +327,8 @@ def on_post_agent(payload: dict) -> dict | None:
     agent = ti.get("subagent_type") or "general-purpose"
     info = cfg.agent_info(agent) or {}
     notes: list[str] = []
+    if _is_background_launch(ti, resp, text, outcome):
+        return _note_background_launch(payload, sid, agent, resp, text)
 
     # --- fallbacks: the agent crashed, was cut off, or returned nothing usable --------------------
     run_status = resp.get("status") if isinstance(resp, dict) else None
@@ -315,11 +360,15 @@ def on_post_agent(payload: dict) -> dict | None:
     step = {}
     with Ledger(sid).update() as data:
         d = data["delegations"].get(payload.get("tool_use_id") or "", {})
-        tier = d.get("tier") or info.get("tier") or "standard"
         agent_id = str(resp.get("agentId")) if isinstance(resp, dict) and resp.get("agentId") else None
         if agent_id:
             data["agent_ids"][agent_id] = agent
         usage = data.get("agent_usage", {}).get(agent_id or "", {})   # filled by SubagentStop (fires first)
+        tier = d.get("tier") or info.get("tier")
+        if tier not in AGENT_TIERS:
+            # unknown or "inherit": use what it really ran on, else the session's model
+            ran = max((usage.get("models") or {}).items(), key=lambda kv: kv[1].get("requests", 0), default=(None, None))[0]
+            tier = tier_of_model(ran, cfg) or tier_of_model(data.get("main_model"), cfg) or "standard"
         step = {"cost_usd": usage.get("cost_usd"), "models": list((usage.get("models") or {}).keys()),
                 "tokens": (resp.get("usage") if isinstance(resp, dict) else None),
                 "duration_ms": resp.get("totalDurationMs") if isinstance(resp, dict) else None,
@@ -339,6 +388,35 @@ def on_post_agent(payload: dict) -> dict | None:
     msg = " | ".join([*notes, advice_msg] if advice_msg else notes)
     if msg:
         return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": "[tierflow] " + msg}}
+    return None
+
+
+def _is_background_launch(ti: dict, resp, text: str, outcome) -> bool:
+    """A run_in_background Agent call returns only "Async agent launched..." at once; the real result arrives
+    later as a notification. Treating that acknowledgement as the result counted every launch as a failed attempt."""
+    if text.lstrip().lower().startswith("async agent launched"):
+        return True
+    if isinstance(resp, dict) and str(resp.get("status", "")).lower() in ("async_launched", "async", "launched"):
+        return True
+    return bool(ti.get("run_in_background")) and outcome.status == "unknown" and \
+        not (isinstance(resp, dict) and resp.get("status") == "completed")
+
+
+def _note_background_launch(payload: dict, sid: str, agent: str, resp, text: str) -> None:
+    agent_id = str(resp["agentId"]) if isinstance(resp, dict) and resp.get("agentId") else None
+    if not agent_id:
+        m = re.search(r"agentId:\s*([\w-]+)", text)
+        agent_id = m.group(1) if m else None
+    with Ledger(sid).update() as data:
+        d = data["delegations"].get(payload.get("tool_use_id") or "")
+        if d is not None:
+            d["background"] = True
+            if agent_id:
+                d["agent_id"] = agent_id
+        if agent_id:
+            data["agent_ids"][agent_id] = agent
+        task_key = (data.get("task") or {}).get("key")
+    emit("agent_launched", session=sid, task=task_key, agent=agent, agent_id=agent_id, background=True)
     return None
 
 
@@ -411,12 +489,17 @@ def on_subagent_stop(payload: dict) -> dict | None:
         p = Path(payload["transcript_path"])
         tpath = str(p.parent / p.stem / "subagents" / f"agent-{agent_id}.jsonl")
     totals = scan_file(tpath, cfg) if tpath and long_path(tpath).is_file() else None
+    if agent_type and totals:
+        learn_tier(agent_type, totals, cfg)
     if agent_id:
         with Ledger(sid).update() as data:
             if agent_type:
                 data["agent_ids"][str(agent_id)] = agent_type
             if totals:
                 data.setdefault("agent_usage", {})[str(agent_id)] = totals.to_dict()
+            for d in data["delegations"].values():            # a background launch has no PostToolUse result
+                if d.get("agent_id") == str(agent_id) and d.get("status") == "running":
+                    d.update(status="finished", ended=now_iso(), cost_usd=totals.cost_usd if totals else None)
     emit("subagent_usage", session=sid, agent=agent_type, agent_id=agent_id,
          usage=totals.to_dict() if totals else None, missing_transcript=totals is None)
     return None

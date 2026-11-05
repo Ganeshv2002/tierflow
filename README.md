@@ -174,7 +174,14 @@ runs count against plan limits. tierflow does not use the Agent SDK or call the 
 - Budgets are enforced when work is delegated and checked at each new prompt; a hook can't stop the main
   session mid-turn. In headless runs use `--max-budget-usd` for a hard cap.
 - A hook's `ask` only prompts in interactive sessions (headless `acceptEdits` resolves it).
-- The classifier is rules, not a model: `orch classify --explain` shows why it routed a task.
+- The classifier is rules, not a model: `orch classify --explain` shows why it routed a task. Engineering
+  words in conversation ("update me when done", "will it improve token usage?", "install this plugin",
+  "explain the architecture") get no hint; a request addressed to the assistant ("can you fix...") still does.
+- Agent types that are not in the config (built-ins like `web-fetch`, other plugins' agents) are **not**
+  assumed to run on your session's model: tierflow records what each actually ran on when it stops, remembers
+  it in `~/.claude/tierflow/agent-models.json`, and until then applies no Opus gate or budget reservation to it.
+  Agents started in the background are recorded as launched and finished when they stop; their report is not
+  parsed (no STATUS line is available), so they get no retry/escalation advice.
 - Benchmarks so far are short single tasks on two codebases; long interactive sessions are not yet
   measured. Numbers above are from one CLI version's models.
 

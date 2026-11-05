@@ -219,6 +219,61 @@ class HookTests(TempHomeCase):
         self.assertEqual(rep["tasks"][0]["steps"][0]["agent"], "tierflow:scout")
         self.assertIn("scout: done $0.001 4s", render(rep))
 
+    def test_background_launch_is_not_a_failed_attempt(self):
+        self.prompt("fix the failing test in OrderServiceTests.cs")
+        bg = {"subagent_type": "tierflow:scout", "run_in_background": True, "prompt": "x"}
+        self.run_hook("pre-agent", self.base(tool_use_id="bg1", tool_input=bg))
+        # as seen live: the call returns only an acknowledgement; the result arrives later as a notification
+        code, out, _ = self.run_hook("post-agent", self.base(
+            tool_use_id="bg1", tool_input=bg,
+            tool_response="Async agent launched successfully.\nagentId: abc123 (internal ID - do not mention to user)"))
+        self.assertEqual((code, out), (0, None))
+        data = Ledger("S1").read()
+        d = data["delegations"]["bg1"]
+        self.assertEqual((d["status"], d["background"], d["agent_id"]), ("running", True, "abc123"))
+        self.assertFalse(data["task"].get("failures"))
+        self.assertEqual(data["task"].get("escalations", 0), 0)
+        events = [e["event"] for e in read_metrics()]
+        self.assertIn("agent_launched", events)
+        self.assertNotIn("agent_result", events)
+        # the structured form of the same acknowledgement
+        self.run_hook("pre-agent", self.base(tool_use_id="bg2", tool_input=bg))
+        code, out, _ = self.run_hook("post-agent", self.base(tool_use_id="bg2", tool_input=bg,
+                                                             tool_response={"status": "async_launched", "agentId": "def456"}))
+        self.assertEqual((code, out), (0, None))
+        self.assertEqual(Ledger("S1").read()["delegations"]["bg2"]["agent_id"], "def456")
+        # when the agent stops, its delegation is finished and its cost recorded
+        self.write("sess/subagents/agent-abc123.jsonl", assistant_line("s1", "claude-haiku-5-5", out=10))
+        self.run_hook("subagent-stop", self.base(agent_id="abc123", agent_type="tierflow:scout"))
+        d = Ledger("S1").read()["delegations"]["bg1"]
+        self.assertEqual(d["status"], "finished")
+        self.assertGreater(d["cost_usd"], 0)
+        # a normal foreground result is still processed
+        self.agent("fg1", "tierflow:scout")
+        _, out, _ = self.post("fg1", "tierflow:scout", {"status": "error", "content": [{"type": "text", "text": "boom"}]})
+        self.assertIn("Retry once", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_unknown_agent_type_is_not_assumed_to_run_on_the_main_model(self):
+        # main session on Opus (see setUp); web-fetch is not in the config
+        self.prompt("fix the failing test in OrderServiceTests.cs")
+        code, out, _ = self.agent("w1", "web-fetch")
+        self.assertTrue(out is None or "Opus-tier" not in out["hookSpecificOutput"].get("additionalContext", ""))
+        self.assertIsNone(Ledger("S1").read()["delegations"]["w1"]["tier"])               # unknown, not "reasoning"
+        # it stops: the real model (Haiku) is recorded and remembered
+        self.write("sess/subagents/agent-wf1.jsonl", assistant_line("s1", "claude-haiku-5-5", out=10))
+        self.run_hook("subagent-stop", self.base(agent_id="wf1", agent_type="web-fetch"))
+        self.post("w1", "web-fetch", {"status": "completed", "agentId": "wf1", "content": [{"type": "text", "text": "page text"}]})
+        step = [e for e in read_metrics() if e["event"] == "agent_result"][-1]
+        self.assertEqual(step["tier"], "light")                                            # taken from what it ran on
+        self.agent("w2", "web-fetch")
+        self.assertEqual(Ledger("S1").read()["delegations"]["w2"]["tier"], "light")      # learned for next time
+        # configured types are untouched: general-purpose still inherits the session's model
+        self.agent("g1", "general-purpose")
+        self.assertEqual(Ledger("S1").read()["delegations"]["g1"]["tier"], "reasoning")
+        # an explicit model parameter still wins
+        self.run_hook("pre-agent", self.base(tool_use_id="w3", tool_input={"subagent_type": "web-fetch", "model": "opus"}))
+        self.assertEqual(Ledger("S1").read()["delegations"]["w3"]["tier"], "reasoning")
+
     def test_bad_input_is_reported_not_swallowed(self):
         import subprocess, sys
         from helpers import ROOT

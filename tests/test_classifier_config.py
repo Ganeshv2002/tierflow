@@ -36,6 +36,32 @@ class ClassifierTests(TempHomeCase):
         self.assertEqual((c.category, c.risk), ("chat", "low"))
         self.assertNotIn("permissions", " ".join(c.reasons))
 
+    def test_engineering_words_in_conversation_get_no_hint(self):
+        # real prompts that were sent to "hand this to the implementer"
+        for p in ("having sub agents seperately for each models running parallely and only share context that is needed "
+                  "will it improve any perfomance token wise?",
+                  "update me when done",
+                  "i want you to integrate https://github.com/nutlope/hallmark skill permanently to my claude code to use in future",
+                  "add this as well https://github.com/multica-ai/andrej-karpathy-skills",
+                  "explain the tierflow architecture to me"):
+            c = self.c(p)
+            self.assertEqual((c.category, c.tier, c.agent), ("chat", "none", None), p)
+
+    def test_real_requests_still_route(self):
+        for p, cat in (("Can you fix the login page?", "standard"),
+                       ("please add dark mode to the settings page", "standard"),
+                       ("add the Order model validation to the checkout service", "standard"),
+                       ("integrate the payment API into the checkout service", "standard"),
+                       ("update the plugin loader function to skip disabled plugins", "standard"),
+                       ("will it improve the cache invalidation code if we split the service?", "standard"),
+                       ("which approach should we use for state management?", "complex"),
+                       ("explain why the tests fail intermittently", "complex"),
+                       ("explain the architecture of the auth module", "discovery"),
+                       ("where is the order total computed?", "discovery"),
+                       ("where is the User model defined?", "discovery"),
+                       ("rename `calcTotal` to `computeTotal` in src/orders.ts", "mechanical")):
+            self.assertEqual(self.c(p).category, cat, p)
+
     def test_non_user_turns_are_ignored(self):
         # seen live: a peer session's message got "high-risk: permission", a subagent report "mechanical"
         for prompt in (

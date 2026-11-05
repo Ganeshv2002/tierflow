@@ -15,3 +15,6 @@ config.toml
 # private: real-repo suite contains excerpts of a private codebase
 bench/suites/linkedin/
 bench/suites/switchboard/
+agent-models.json
+tuned.toml
+tune-history.jsonl
