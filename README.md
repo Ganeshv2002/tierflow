@@ -122,8 +122,22 @@ reservation would exceed a limit, it needs approval; cheap Haiku delegations are
 | `validate [--files ...] [--dry-run]` | build/typecheck/tests for affected + downstream projects; compact digest |
 | `usage [--transcript p]` | tokens (incl. cache and thinking where reported) and cost for a session, incl. subagents |
 | `report [--since days]` | cost per model, per agent, per task and per step; retries, escalations |
+| `dashboard [--port 8765] [--open] [--json]` | live local page: agents running now with their tasks and models, sessions and context size, token usage and cost by model and over time |
 | `tune [--since days] [--apply ID...] [--revert]` | learns from your own metrics: evidence + suggested config changes (see below) |
 | `bench run/report` | baseline vs tierflow benchmark ([docs/BENCHMARKING.md](docs/BENCHMARKING.md)) |
+
+## Live dashboard
+
+`python orch.py dashboard` serves a page at `http://127.0.0.1:8765/` (add `--open` to launch the browser;
+`--json` prints one snapshot instead). It shows, refreshed every 3 seconds: how many agents are running right
+now and what each is doing, which model each agent and each session is on, each session's context size against
+the warning threshold, and token usage and cost by model and over time (1 h / 24 h / 7 d / 30 d).
+
+It reads Claude Code's own transcripts under `~/.claude/projects`, so it covers every session, with or without
+tierflow's hooks. It is read-only and listens on loopback only (other `Host` headers are refused); the page loads
+no external scripts, fonts or images. Agent state is inferred from files: *running* = the transcript changed in
+the last 3 minutes, *finished* = Claude Code marked it finished or the agent handed its report back, *stalled* =
+unfinished and silent (interrupted, or one very long tool call). Benchmark workspaces are hidden unless ticked.
 
 ## Learning from your own usage
 

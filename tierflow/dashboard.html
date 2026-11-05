@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tierflow live</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #6b6a65;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
+  --s-opus: #2a78d6; --s-sonnet: #eb6834; --s-haiku: #1baf7a; --s-other: #898781;
+  --good: #0ca30c; --good-ink: #006300; --warn: #fab219; --warn-ink: #7a5300; --crit: #d03b3b;
+  --seq: #2a78d6; --seq-track: #e1e0d9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #a09f98;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+    --s-opus: #3987e5; --s-sonnet: #d95926; --s-haiku: #199e70; --s-other: #898781;
+    --good-ink: #0ca30c; --warn-ink: #fab219; --seq: #3987e5; --seq-track: #2c2c2a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #a09f98;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+  --s-opus: #3987e5; --s-sonnet: #d95926; --s-haiku: #199e70; --s-other: #898781;
+  --good-ink: #0ca30c; --warn-ink: #fab219; --seq: #3987e5; --seq-track: #2c2c2a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--ink);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { padding: 0 16px 48px; }
+.wrap { max-width: 1240px; margin: 0 auto; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; padding: 20px 0 14px; }
+h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: -.01em; }
+h1 small { font-weight: 400; color: var(--muted); margin-left: 8px; font-size: 13px; }
+.spacer { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; color: var(--ink-2); padding: 6px 12px; font: inherit; cursor: pointer; min-height: 32px; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button:hover { background: var(--wash); }
+.seg button[aria-pressed="true"] { color: var(--ink); font-weight: 650; background: var(--wash); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--s-opus); outline-offset: 2px; }
+.live { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 13px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); display: inline-block; }
+.dot.bad { background: var(--warn); border-radius: 2px; transform: rotate(45deg); }
+@media (prefers-reduced-motion: no-preference) { .live:not(.off) .dot { animation: pulse 2s ease-in-out infinite; } }
+@keyframes pulse { 50% { opacity: .35; } }
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px; cursor: pointer; }
+.iconbtn { border: 1px solid var(--border); background: var(--surface); color: var(--ink-2); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; min-height: 32px; }
+.iconbtn:hover { background: var(--wash); }
+
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.tile, .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; min-width: 0; }
+.tile .lab { color: var(--ink-2); font-size: 13px; }
+.tile .num { font-size: 34px; font-weight: 650; letter-spacing: -.02em; line-height: 1.15; margin-top: 4px; }
+.tile .sub { color: var(--muted); font-size: 12.5px; margin-top: 4px; min-height: 18px; }
+.panel { margin-bottom: 12px; }
+.panel h2 { font-size: 14px; margin: 0 0 2px; font-weight: 650; }
+.panel .hint { color: var(--muted); font-size: 12.5px; margin: 0 0 12px; }
+.row2 { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 12px; }
+.head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+td { padding: 9px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.task { min-width: 200px; max-width: 420px; color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.doing { color: var(--muted); font-size: 12px; min-width: 200px; max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+.sm { color: var(--muted); font-size: 12px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; flex: none; }
+.st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-weight: 550; }
+.st svg { flex: none; }
+.empty { color: var(--muted); padding: 18px 4px; }
+.bar { height: 8px; background: var(--seq-track); border-radius: 4px; position: relative; min-width: 90px; }
+.bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--seq); }
+.bar > b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink-2); opacity: .7; }
+.ctx { display: flex; align-items: center; gap: 8px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--ink-2); font-size: 12.5px; margin-bottom: 8px; }
+svg text { fill: var(--muted); font: 11.5px system-ui, -apple-system, "Segoe UI", sans-serif; }
+#chart { width: 100%; display: block; }
+.tip { position: fixed; pointer-events: none; z-index: 5; background: var(--surface); color: var(--ink); border: 1px solid var(--axis);
+  border-radius: 8px; padding: 8px 10px; font-size: 12.5px; box-shadow: 0 4px 16px rgba(0,0,0,.18); display: none; min-width: 150px; }
+.tip .t { color: var(--muted); margin-bottom: 4px; }
+.tip .r { display: flex; align-items: center; gap: 7px; justify-content: space-between; }
+.tip .r span:first-child { display: inline-flex; align-items: center; gap: 7px; }
+.tip .tot { border-top: 1px solid var(--grid); margin-top: 4px; padding-top: 4px; display: flex; justify-content: space-between; font-weight: 600; }
+footer { color: var(--muted); font-size: 12.5px; padding-top: 6px; }
+.note { color: var(--warn-ink); font-size: 12.5px; margin-top: 8px; }
+@media (max-width: 1000px) { .row2 { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 900px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .tile .num { font-size: 28px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>tierflow live<small>local, read-only</small></h1>
+    <div class="spacer"></div>
+    <label class="check"><input type="checkbox" id="bench"> include benchmark runs</label>
+    <div class="seg" role="group" aria-label="Time window" id="windows"></div>
+    <button class="iconbtn" id="theme" title="Switch light / dark / system">Theme</button>
+    <span class="live" id="live" role="status"><span class="dot"></span><span id="livetxt">connecting...</span></span>
+  </header>
+
+  <section class="tiles" aria-label="Summary" id="tiles"></section>
+
+  <section class="panel">
+    <h2>Agents</h2>
+    <p class="hint">Subagents started by your sessions. State is inferred from their transcript files: running = wrote in the last 3 minutes; stalled = unfinished and silent (interrupted, or a very long tool call).</p>
+    <div class="tablewrap" id="agents"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Sessions</h2>
+    <p class="hint">Main conversations. Context = what the next request re-reads; the tick marks tierflow's warning threshold.</p>
+    <div class="tablewrap" id="sessions"></div>
+  </section>
+
+  <div class="row2">
+    <section class="panel">
+      <div class="head">
+        <div><h2 id="charttitle">Usage over time</h2><p class="hint" id="chartsub"></p></div>
+        <div class="spacer"></div>
+        <div class="seg" role="group" aria-label="Metric" id="metric"></div>
+        <button class="iconbtn" id="viewtoggle" aria-pressed="false">Show as table</button>
+      </div>
+      <div class="legend" id="legend"></div>
+      <div id="chartbox"><svg id="chart" role="img" aria-label="Stacked columns of usage over time by model family"></svg></div>
+      <div class="tablewrap" id="charttable" hidden></div>
+    </section>
+    <section class="panel">
+      <h2>By model</h2>
+      <p class="hint">Exact model ids in the selected window (uncached input is negligible and counted in the totals only).</p>
+      <div class="tablewrap" id="models"></div>
+      <div class="note" id="unpriced" hidden></div>
+    </section>
+  </div>
+  <footer>Costs are list-price estimates from transcript token counts (a subscription is not billed this way). Read from <span id="src">~/.claude/projects</span>; nothing leaves this machine.</footer>
+</div>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+"use strict";
+const FAM = { opus: ["Opus", "--s-opus"], sonnet: ["Sonnet", "--s-sonnet"], haiku: ["Haiku", "--s-haiku"], other: ["Other", "--s-other"] };
+const WINDOWS = ["1h", "24h", "7d", "30d"];
+const S = { window: "24h", metric: "cost", bench: false, table: false, data: null, ok: false, last: 0 };
+try { const v = JSON.parse(localStorage.getItem("tf-dash") || "{}"); if (WINDOWS.includes(v.window)) S.window = v.window; if (v.metric === "tokens") S.metric = "tokens"; } catch (e) {}
+const save = () => { try { localStorage.setItem("tf-dash", JSON.stringify({ window: S.window, metric: S.metric })); } catch (e) {} };
+
+// ---- helpers: elements are built from text nodes only, because task text comes from prompts -------------------
+const SVGNS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) { if (k === "class") n.className = v; else if (k === "style") n.setAttribute("style", v); else n.setAttribute(k, v); }
+  for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return n;
+}
+function sv(tag, attrs, ...kids) {
+  const n = document.createElementNS(SVGNS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) n.setAttribute(k, v);
+  for (const k of kids.flat()) if (k != null) n.append(k.nodeType ? k : document.createTextNode(String(k)));
+  return n;
+}
+const $ = (id) => document.getElementById(id);
+const fmtN = (n) => n >= 1e9 ? (n / 1e9).toFixed(2) + "B" : n >= 1e6 ? (n / 1e6).toFixed(n >= 1e8 ? 0 : 1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(n >= 1e5 ? 0 : 1) + "k" : String(Math.round(n));
+const fmtC = (c) => c >= 100 ? "$" + c.toFixed(0) : c >= 1 ? "$" + c.toFixed(2) : c > 0 ? "$" + c.toFixed(3) : "$0.00";
+const fmtD = (s) => { if (s == null) return "-"; s = Math.max(0, Math.round(s)); if (s < 60) return s + "s"; if (s < 3600) return Math.floor(s / 60) + "m " + (s % 60) + "s"; return Math.floor(s / 3600) + "h " + Math.floor(s % 3600 / 60) + "m"; };
+const ago = (t, now) => fmtD(now - t) + " ago";
+const famOf = (m) => FAM[m] ? m : "other";
+const col = (f) => "var(" + FAM[famOf(f)][1] + ")";
+function chipModel(model, fam) {
+  if (!model) return el("span", { class: "sm" }, "-");
+  return el("span", { class: "chip", title: model }, el("span", { class: "sw", style: "background:" + col(fam) }), model.replace(/^claude-/, ""));
+}
+// status: icon + label, never colour alone
+const ICON = {
+  running: () => sv("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" }, sv("circle", { cx: 7, cy: 7, r: 5, fill: "var(--good)" })),
+  working: () => ICON.running(),
+  finished: () => sv("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" }, sv("path", { d: "M2.5 7.5l3 3 6-7", fill: "none", stroke: "var(--ink-2)", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round" })),
+  idle: () => sv("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" }, sv("circle", { cx: 7, cy: 7, r: 4.5, fill: "none", stroke: "var(--muted)", "stroke-width": 2 })),
+  inactive: () => ICON.idle(),
+  stalled: () => sv("svg", { width: 14, height: 14, viewBox: "0 0 14 14", "aria-hidden": "true" }, sv("path", { d: "M7 1.5l6 10.5H1z", fill: "var(--warn)" }), sv("path", { d: "M7 5.5v3M7 10v.01", stroke: "#0b0b0b", "stroke-width": 1.5, "stroke-linecap": "round" })),
+};
+const status = (s) => el("span", { class: "st" }, ICON[s](), s);
+function table(cols, rows, empty) {
+  if (!rows.length) return el("div", { class: "empty" }, empty);
+  return el("table", {}, el("thead", {}, el("tr", {}, cols.map((c) => el("th", { class: c.num ? "num" : "" }, c.h)))),
+    el("tbody", {}, rows.map((r) => el("tr", {}, cols.map((c) => el("td", { class: c.num ? "num" : "" }, c.f(r)))))));
+}
+const taskCell = (t, doing, title) => el("div", {}, el("div", { class: "task", title: title || t }, t || "-"), doing ? el("div", { class: "doing", title: doing }, "now: " + doing) : null);
+
+// ---- render -----------------------------------------------------------------------------------------------
+function renderTiles(d) {
+  const k = d.kpi, t = d.total;
+  const cr = t.tokens ? Math.round(100 * t.cache_read / t.tokens) : 0;
+  const tile = (lab, num, sub) => el("div", { class: "tile" }, el("div", { class: "lab" }, lab), el("div", { class: "num" }, num), el("div", { class: "sub" }, sub));
+  $("tiles").replaceChildren(
+    tile("Agents running now", String(k.agents_running), k.agents_stalled + " stalled · " + k.agents_finished + " finished in window"),
+    tile("Sessions working now", String(k.sessions_working), "of " + k.sessions + " touched in window"),
+    tile("Cost, " + S.window, fmtC(t.cost), t.requests + " model requests"),
+    tile("Tokens, " + S.window, fmtN(t.tokens), "cache reads " + cr + "% · output " + fmtN(t.output)));
+}
+function renderAgents(d) {
+  $("agents").replaceChildren(table([
+    { h: "State", f: (a) => status(a.state) },
+    { h: "Agent", f: (a) => el("div", {}, el("div", {}, a.type), el("div", { class: "sm" }, a.project + " · " + a.session)) },
+    { h: "Task", f: (a) => taskCell(a.description || a.task, a.doing, a.task) },
+    { h: "Model", f: (a) => el("div", {}, a.model ? chipModel(a.model, famOf((a.models[0] || {}).family)) : el("span", { class: "sm" }, a.state === "finished" ? "-" : "waiting for first response"),
+        a.models.length > 1 ? el("div", { class: "sm" }, "+ " + a.models.slice(1).map((m) => m.model.replace(/^claude-/, "")).join(", ")) : null) },
+    { h: "Time", num: 1, f: (a) => fmtD(a.elapsed) },
+    { h: "Tokens", num: 1, f: (a) => fmtN(a.tokens) },
+    { h: "Cost", num: 1, f: (a) => a.priced ? fmtC(a.cost) : fmtC(a.cost) + "+" },
+  ], d.agents, "No agents in this window. They appear when a session delegates to a subagent."));
+}
+function renderSessions(d) {
+  const warn = d.warn_context_tokens;
+  $("sessions").replaceChildren(table([
+    { h: "State", f: (s) => status(s.state) },
+    { h: "Project", f: (s) => el("div", {}, el("div", {}, s.project), el("div", { class: "sm" }, s.id)) },
+    { h: "Task", f: (s) => taskCell(s.task, s.state === "working" ? s.doing : "") },
+    { h: "Model", f: (s) => chipModel(s.model, s.family) },
+    { h: "Context", f: (s) => {
+        if (!s.context) return el("span", { class: "sm" }, "-");
+        const over = warn && s.context >= warn;
+        const fill = el("i", { style: "width:" + Math.min(100, 100 * s.context / (warn ? warn * 2 : 1e6)) + "%" + (over ? ";background:var(--warn)" : "") });
+        const bar = el("div", { class: "bar" }, fill, warn ? el("b", { style: "left:50%" }) : null);
+        return el("div", { class: "ctx" }, bar, el("span", { class: over ? "st" : "", style: over ? "color:var(--warn-ink)" : "" }, over ? [ICON.stalled(), fmtN(s.context) + " large"] : fmtN(s.context)));
+      } },
+    { h: "Agents", num: 1, f: (s) => s.agents_total ? s.agents_running + " / " + s.agents_total : "-" },
+    { h: "Cost", num: 1, f: (s) => fmtC(s.cost) },
+  ], d.sessions, "No sessions touched in this window."));
+}
+function renderModels(d) {
+  const max = Math.max(1e-9, ...d.models.map((m) => m.cost));
+  $("models").replaceChildren(table([
+    { h: "Model", f: (m) => chipModel(m.model, m.family) },
+    { h: "Cost", num: 1, f: (m) => el("div", {}, fmtC(m.cost) + (m.priced ? "" : "+"),
+        el("div", { class: "bar", style: "margin-top:4px;min-width:70px" }, el("i", { style: "width:" + (100 * m.cost / max) + "%;background:" + col(m.family) }))) },
+    { h: "Out", num: 1, f: (m) => fmtN(m.output) },
+    { h: "Cache read", num: 1, f: (m) => fmtN(m.cache_read) },
+    { h: "Cache write", num: 1, f: (m) => fmtN(m.cache_write) },
+  ], d.models, "No usage in this window."));
+  const u = $("unpriced");
+  u.hidden = !d.unpriced.length;
+  u.textContent = d.unpriced.length ? "No price known for: " + d.unpriced.join(", ") + ". Their cost shows as 0 (marked +); tokens are still counted." : "";
+}
+
+// stacked columns ---------------------------------------------------------------------------------------------
+function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const f = v / p; return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p; }
+function bucketLabel(t, step) {
+  const d = new Date(t * 1000);
+  if (step >= 86400) return d.toLocaleDateString([], { month: "short", day: "numeric" });
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+function bucketTitle(t, step) {
+  const d = new Date(t * 1000);
+  return step >= 86400 ? d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) :
+    d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + (step < 3600 ? " (5 min)" : " (hour)");
+}
+const val = (b, f) => (b[f] ? b[f][S.metric] : 0);
+const fmtV = (v) => S.metric === "cost" ? fmtC(v) : fmtN(v);
+function topRounded(x, y, w, h, r) { r = Math.min(r, w / 2, h); return "M" + x + " " + (y + h) + "V" + (y + r) + "Q" + x + " " + y + " " + (x + r) + " " + y + "H" + (x + w - r) + "Q" + (x + w) + " " + y + " " + (x + w) + " " + (y + r) + "V" + (y + h) + "Z"; }
+function renderChart(d) {
+  const fams = ["opus", "sonnet", "haiku", "other"].filter((f) => d.series.some((b) => val(b, f) > 0));
+  $("charttitle").textContent = S.metric === "cost" ? "Cost over time" : "Tokens over time";
+  $("chartsub").textContent = "per " + (d.step_s >= 86400 ? "day" : d.step_s >= 3600 ? "hour" : "5 minutes") + ", stacked by model family";
+  $("legend").replaceChildren(...fams.map((f) => el("span", { class: "chip" }, el("span", { class: "sw", style: "background:" + col(f) }), FAM[f][0])));
+  const box = $("chartbox"), tb = $("charttable");
+  box.hidden = S.table; tb.hidden = !S.table;
+  const totals = d.series.map((b) => fams.reduce((a, f) => a + val(b, f), 0));
+  if (!totals.some((t) => t > 0)) { $("chart").replaceChildren(); box.replaceChildren(el("div", { class: "empty" }, "No usage in this window.")); tb.replaceChildren(); return; }
+  if (!$("chart").isConnected) box.replaceChildren(el("svg"));      // re-created below
+  if (S.table) {
+    tb.replaceChildren(table([{ h: "Time", f: (b) => bucketTitle(b.t, d.step_s) },
+      ...fams.map((f) => ({ h: FAM[f][0], num: 1, f: (b) => fmtV(val(b, f)) })),
+      { h: "Total", num: 1, f: (b) => fmtV(fams.reduce((a, f) => a + val(b, f), 0)) }], d.series.filter((b, i) => totals[i] > 0).reverse(), ""));
+    return;
+  }
+  const W = Math.max(300, box.clientWidth || 600), H = 230, L = 46, R = 8, T = 8, B = 24;
+  const svg = sv("svg", { id: "chart", viewBox: "0 0 " + W + " " + H, width: W, height: H, role: "img", "aria-label": "Stacked columns of " + S.metric + " over time by model family" });
+  const max = niceMax(Math.max(...totals)), n = d.series.length, plotW = W - L - R, plotH = H - T - B;
+  const slot = plotW / n, bw = Math.max(3, Math.min(30, slot * 0.72));
+  const y = (v) => T + plotH - plotH * v / max;
+  for (let i = 0; i <= 4; i++) {
+    const v = max * i / 4;
+    svg.append(sv("line", { x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: i ? "var(--grid)" : "var(--axis)", "stroke-width": 1 }),
+      sv("text", { x: L - 6, y: y(v) + 4, "text-anchor": "end" }, fmtV(v)));
+  }
+  const every = Math.ceil(n / Math.max(2, Math.floor(plotW / 90)));
+  d.series.forEach((b, i) => {
+    const cx = L + slot * i + slot / 2;
+    if (i % every === 0) svg.append(sv("text", { x: cx, y: H - 6, "text-anchor": "middle" }, bucketLabel(b.t, d.step_s)));
+    let base = 0;
+    const live = fams.filter((f) => val(b, f) > 0);
+    live.forEach((f, j) => {
+      const h = plotH * val(b, f) / max, top = j === live.length - 1;
+      const yy = y(base) - h;
+      const a = { fill: col(f), stroke: "var(--surface)", "stroke-width": 2 };
+      svg.append(top && h > 3 ? sv("path", { d: topRounded(cx - bw / 2, yy, bw, h, 4), ...a }) : sv("rect", { x: cx - bw / 2, y: yy, width: bw, height: Math.max(h, 1), ...a }));
+      base += val(b, f);
+    });
+    const hit = sv("rect", { x: L + slot * i, y: T, width: slot, height: plotH, fill: "transparent", "data-i": i });
+    svg.append(hit);
+  });
+  svg.addEventListener("mousemove", (e) => {
+    const r = e.target.getAttribute && e.target.getAttribute("data-i");
+    if (r == null) return tipHide();
+    const b = d.series[+r];
+    const rows = fams.filter((f) => val(b, f) > 0);
+    const tip = $("tip");
+    tip.replaceChildren(el("div", { class: "t" }, bucketTitle(b.t, d.step_s)),
+      ...rows.map((f) => el("div", { class: "r" }, el("span", {}, el("span", { class: "sw", style: "background:" + col(f) }), FAM[f][0]), el("span", {}, fmtV(val(b, f))))),
+      el("div", { class: "tot" }, el("span", {}, "Total"), el("span", {}, fmtV(rows.reduce((a, f) => a + val(b, f), 0)))));
+    tip.style.display = "block";
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    tip.style.left = Math.min(window.innerWidth - w - 8, e.clientX + 14) + "px";
+    tip.style.top = Math.min(window.innerHeight - h - 8, e.clientY + 14) + "px";
+  });
+  svg.addEventListener("mouseleave", tipHide);
+  box.replaceChildren(svg);
+}
+function tipHide() { $("tip").style.display = "none"; }
+
+function render() {
+  const d = S.data; if (!d) return;
+  renderTiles(d); renderAgents(d); renderSessions(d); renderModels(d); renderChart(d);
+}
+
+// ---- controls & polling -------------------------------------------------------------------------------------
+function controls() {
+  const w = $("windows");
+  w.replaceChildren(...WINDOWS.map((x) => el("button", { type: "button", "aria-pressed": String(x === S.window) }, x)));
+  w.onclick = (e) => { const x = e.target.textContent; if (e.target.tagName !== "BUTTON" || !WINDOWS.includes(x)) return; S.window = x; save(); controls(); load(); };
+  const m = $("metric");
+  m.replaceChildren(...[["cost", "Cost"], ["tokens", "Tokens"]].map(([k, l]) => el("button", { type: "button", "data-k": k, "aria-pressed": String(S.metric === k) }, l)));
+  m.onclick = (e) => { const k = e.target.getAttribute("data-k"); if (!k) return; S.metric = k; save(); controls(); render(); };
+  $("viewtoggle").textContent = S.table ? "Show as chart" : "Show as table";
+  $("viewtoggle").setAttribute("aria-pressed", String(S.table));
+}
+$("viewtoggle").onclick = () => { S.table = !S.table; controls(); render(); };
+$("bench").onchange = (e) => { S.bench = e.target.checked; load(); };
+$("theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme");
+  const next = cur === "light" ? "dark" : cur === "dark" ? null : "light";
+  if (next) document.documentElement.setAttribute("data-theme", next); else document.documentElement.removeAttribute("data-theme");
+  $("theme").textContent = next ? "Theme: " + next : "Theme: system";
+  render();
+};
+async function load() {
+  try {
+    const r = await fetch("api/snapshot?window=" + S.window + "&bench=" + (S.bench ? 1 : 0), { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    S.data = await r.json(); S.ok = true; S.last = Date.now(); render();
+  } catch (e) { S.ok = false; }
+  live();
+}
+function live() {
+  const l = $("live"), dot = l.querySelector(".dot");
+  l.classList.toggle("off", !S.ok); dot.classList.toggle("bad", !S.ok);
+  $("livetxt").textContent = S.ok ? "live · updated " + Math.max(0, Math.round((Date.now() - S.last) / 1000)) + "s ago" : "disconnected, retrying";
+}
+setInterval(() => { if (!document.hidden) load(); }, 3000);
+setInterval(live, 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+let rt; new ResizeObserver(() => { clearTimeout(rt); rt = setTimeout(() => { if (S.data && !S.table) renderChart(S.data); }, 120); }).observe($("chartbox"));
+controls(); load();
+</script>
+</body>
+</html>

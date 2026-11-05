@@ -67,6 +67,7 @@ main session (your model) reads the hint, uses the `route` skill when it needs t
 | `tierflow/budget.py` | Session/task budget decisions with tier reservations. |
 | `tierflow/escalation.py` | Evidence-based retry/escalate/stop policy and the compact failure report format. |
 | `tierflow/hooks.py` | Hook entry points. Errors are reported (exit 1 → visible notice), never silently swallowed; the budget gate fails open with a message. |
+| `tierflow/dashboard.py` + `dashboard.html` | `orch dashboard`: incremental in-memory reader of the transcripts (main sessions and `subagents/agent-*.jsonl` + `.meta.json`), a snapshot of running/stalled/finished agents, sessions, usage by model and over time, and a loopback-only read-only HTTP server with a Host check and a CSP. The page builds its DOM from text nodes only (task text comes from prompts). |
 | `tierflow/tune.py` | `orch tune`: per-prompt rows from the metrics (cost until the next prompt, context size at the start, hint followed, agents, outcome), compared within context-size groups; suggestions are applied only on request, to a whitelisted `tuned.toml`. |
 | `tierflow/bench.py` | Baseline vs optimized benchmark harness over identical repo snapshots. |
 

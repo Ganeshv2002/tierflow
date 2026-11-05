@@ -185,6 +185,16 @@ def cmd_tune(args) -> int:
     return 0
 
 
+def cmd_dashboard(args) -> int:
+    from . import dashboard
+    cfg = load_config(_root(args))
+    if args.json:
+        snap = dashboard.Dashboard(cfg).snapshot(dashboard.parse_window(args.window), args.bench)
+        print(json.dumps(snap, indent=2))
+        return 0
+    return dashboard.serve(cfg, args.port, args.open)
+
+
 def cmd_config(args) -> int:
     cfg = load_config(_root(args), mode_override=args.mode)
     if args.json:
@@ -248,6 +258,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--apply", nargs="+", metavar="ID", help="write these suggestions to tuned.toml")
     sp.add_argument("--revert", action="store_true", help="delete tuned.toml")
     common(sp); sp.set_defaults(fn=cmd_tune)
+
+    sp = sub.add_parser("dashboard", help="live local dashboard: token usage, running agents, their tasks and models")
+    sp.add_argument("--port", type=int, default=8765); sp.add_argument("--open", action="store_true", help="open the browser")
+    sp.add_argument("--json", action="store_true", help="print one snapshot and exit")
+    sp.add_argument("--window", default="24h", help="1h | 24h | 7d | 30d (with --json)")
+    sp.add_argument("--bench", action="store_true", help="include benchmark workspaces (with --json)")
+    common(sp, json_flag=False); sp.set_defaults(fn=cmd_dashboard)
 
     sp = sub.add_parser("config", help="show effective configuration")
     sp.add_argument("--mode"); common(sp); sp.set_defaults(fn=cmd_config)
